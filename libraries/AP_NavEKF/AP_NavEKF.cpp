@@ -395,7 +395,7 @@ NavEKF::NavEKF(const AP_AHRS *ahrs, AP_Baro &baro) :
     msecMagDelay(40),               // Magnetometer measurement delay (msec)
     msecTasDelay(240),              // Airspeed measurement delay (msec)
     gpsRetryTimeUseTAS(10000),      // GPS retry time with airspeed measurements (msec)
-    gpsRetryTimeNoTAS(7000),        // GPS retry time without airspeed measurements (msec)
+    gpsRetryTimeNoTAS(5000),        // GPS retry time without airspeed measurements (msec)
     gpsFailTimeWithFlow(5000),      // If we have no GPS for longer than this and we have optical flow, then we will switch across to using optical flow (msec)
     hgtRetryTimeMode0(10000),       // Height retry time with vertical velocity measurement (msec)
     hgtRetryTimeMode12(5000),       // Height retry time without vertical velocity measurement (msec)
@@ -817,6 +817,8 @@ void NavEKF::SelectVelPosFusion()
                 decayGpsOffset();
                 ResetPosition();
                 ResetVelocity();
+                // record the fail time
+                lastPosFailTime = imuSampleTime_ms;
             }
         } else {
             fuseVelData = false;
@@ -896,6 +898,14 @@ void NavEKF::SelectVelPosFusion()
             states[i] += hgtIncrStateDelta[i];
         }
     }
+
+    // Detect and declare bad GPS aiding status for minimum 10 seconds if a GPS rejection occurs within 10 seconds of last position reset
+    // this looks after case where inertial errors cause ongoing rejection of GPS with periodic resets
+    if ((posTestRatio > 1.0f) && ((imuSampleTime_ms - lastPosFailTime) < 10000)) {
+        lastGpsAidBadTime_ms = imuSampleTime_ms;
+        gpsAidingBad = true;
+    }
+    gpsAidingBad = gpsAidingBad && ((imuSampleTime_ms - lastGpsAidBadTime_ms) < 10000);
 }
 
 // select fusion of magnetometer data
@@ -1992,6 +2002,8 @@ void NavEKF::FuseVelPosNED()
                         ResetPosition();
                         // don't fuse data on this time step
                         fusePosData = false;
+                        // record the fail time
+                        lastPosFailTime = imuSampleTime_ms;
                     }
                 }
             } else {
@@ -4443,6 +4455,7 @@ void NavEKF::InitialiseVariables()
     lastAirspeedUpdate = 0;
     lastVelPassTime = imuSampleTime_ms;
     lastPosPassTime = imuSampleTime_ms;
+    lastPosFailTime = 0;
     lastHgtPassTime = imuSampleTime_ms;
     lastTasPassTime = imuSampleTime_ms;
     lastStateStoreTime_ms = imuSampleTime_ms;
@@ -4457,6 +4470,7 @@ void NavEKF::InitialiseVariables()
     gndHgtValidTime_ms = 0;
     ekfStartTime_ms = imuSampleTime_ms;
     lastGpsVelFail_ms = 0;
+    lastGpsAidBadTime_ms = 0;
 
     // initialise other variables
     gpsNoiseScaler = 1.0f;
@@ -4539,7 +4553,7 @@ void NavEKF::InitialiseVariables()
     optFlowRngHealthy = false;
     minHgtPreFlight = 0.0f;
     maxHgtPreFlight = 0.0f;
-
+    gpsAidingBad = false;
 }
 
 // return true if we should use the airspeed sensor
@@ -4689,7 +4703,7 @@ void  NavEKF::getFilterStatus(nav_filter_status &status) const
     status.flags.horiz_vel = someHorizRefData && notDeadReckoning && filterHealthy;      // horizontal velocity estimate valid
     status.flags.vert_vel = someVertRefData && filterHealthy;        // vertical velocity estimate valid
     status.flags.horiz_pos_rel = ((doingFlowNav && gndOffsetValid) || doingWindRelNav || doingNormalGpsNav) && notDeadReckoning && filterHealthy;   // relative horizontal position estimate valid
-    status.flags.horiz_pos_abs = doingNormalGpsNav && notDeadReckoning && filterHealthy; // absolute horizontal position estimate valid
+    status.flags.horiz_pos_abs = !gpsAidingBad && doingNormalGpsNav && notDeadReckoning && filterHealthy; // absolute horizontal position estimate valid
     status.flags.vert_pos = !hgtTimeout && filterHealthy;            // vertical position estimate valid
     status.flags.terrain_alt = gndOffsetValid && filterHealthy;		// terrain height estimate valid
     status.flags.const_pos_mode = constPosMode && filterHealthy;     // constant position mode
@@ -4803,6 +4817,8 @@ void NavEKF::performArmingChecks()
                 secondLastFixTime_ms = imuSampleTime_ms;
                 // reset the last valid position fix time to prevent unwanted activation of GPS glitch logic
                 lastPosPassTime = imuSampleTime_ms;
+                // reset the fail time to prevent premature reporting of loss of position accruacy
+                lastPosFailTime = 0;
             }
         }
         // Reset filter positon, height and velocity states on arming or disarming
