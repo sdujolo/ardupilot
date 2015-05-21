@@ -71,19 +71,19 @@ void Quaternion::from_rotation_matrix(const Matrix3f &m)
         qy = (m02 - m20) / S; 
         qz = (m10 - m01) / S; 
     } else if ((m00 > m11) && (m00 > m22)) { 
-        float S = sqrtf(1.0 + m00 - m11 - m22) * 2;
+        float S = sqrtf(1.0f + m00 - m11 - m22) * 2;
         qw = (m21 - m12) / S;
         qx = 0.25f * S;
         qy = (m01 + m10) / S; 
         qz = (m02 + m20) / S; 
     } else if (m11 > m22) { 
-        float S = sqrtf(1.0 + m11 - m00 - m22) * 2;
+        float S = sqrtf(1.0f + m11 - m00 - m22) * 2;
         qw = (m02 - m20) / S;
         qx = (m01 + m10) / S; 
         qy = 0.25f * S;
         qz = (m12 + m21) / S; 
     } else { 
-        float S = sqrtf(1.0 + m22 - m00 - m11) * 2;
+        float S = sqrtf(1.0f + m22 - m00 - m11) * 2;
         qw = (m10 - m01) / S;
         qx = (m02 + m20) / S;
         qy = (m12 + m21) / S;
@@ -141,7 +141,7 @@ void Quaternion::from_vector312(float roll ,float pitch, float yaw)
 
 void Quaternion::from_axis_angle(Vector3f v) {
     float theta = v.length();
-    if(theta == 0.0f) {
+    if(theta < 1.0e-12f) {
         q1 = 1.0f;
         q2=q3=q4=0.0f;
         return;
@@ -151,13 +151,13 @@ void Quaternion::from_axis_angle(Vector3f v) {
 }
 
 void Quaternion::from_axis_angle(const Vector3f &axis, float theta) {
-    if(theta == 0.0f) {
+    if(theta < 1.0e-12f) {
         q1 = 1.0f;
         q2=q3=q4=0.0f;
     }
     float st2 = sinf(theta/2.0f);
 
-    q1 = cos(theta/2.0f);
+    q1 = cosf(theta/2.0f);
     q2 = axis.x * st2;
     q3 = axis.y * st2;
     q4 = axis.z * st2;
@@ -172,15 +172,15 @@ void Quaternion::rotate(const Vector3f &v) {
 void Quaternion::to_axis_angle(Vector3f &v) {
     float l = sqrt(sq(q2)+sq(q3)+sq(q4));
     v = Vector3f(q2,q3,q4);
-    if(l != 0) {
+    if(l >= 1.0e-12f) {
         v /= l;
-        v *= wrap_PI(2.0f * atan2(l,q1));
+        v *= wrap_PI(2.0f * atan2f(l,q1));
     }
 }
 
 void Quaternion::from_axis_angle_fast(Vector3f v) {
     float theta = v.length();
-    if(theta == 0.0f) {
+    if(theta < 1.0e-12f) {
         q1 = 1.0f;
         q2=q3=q4=0.0f;
     }
@@ -201,7 +201,7 @@ void Quaternion::from_axis_angle_fast(const Vector3f &axis, float theta) {
 
 void Quaternion::rotate_fast(const Vector3f &v) {
     float theta = v.length();
-    if(theta == 0.0f) return;
+    if(theta < 1.0e-12f) return;
     float t2 = theta/2.0f;
     float sqt2 = sq(t2);
     float st2 = t2-sqt2*t2/6.0f;
@@ -226,12 +226,30 @@ void Quaternion::rotate_fast(const Vector3f &v) {
     q4 = w1*z2 + x1*y2 - y1*x2 + z1*w2;
 }
 
+// get euler roll angle
+float Quaternion::get_euler_roll() const
+{
+    return (atan2f(2.0f*(q1*q2 + q3*q4), 1 - 2.0f*(q2*q2 + q3*q3)));
+}
+
+// get euler pitch angle
+float Quaternion::get_euler_pitch() const
+{
+    return safe_asin(2.0f*(q1*q3 - q4*q2));
+}
+
+// get euler yaw angle
+float Quaternion::get_euler_yaw() const
+{
+    return atan2f(2.0f*(q1*q4 + q2*q3), 1 - 2.0f*(q3*q3 + q4*q4));
+}
+
 // create eulers from a quaternion
 void Quaternion::to_euler(float &roll, float &pitch, float &yaw) const
 {
-    roll = (atan2f(2.0f*(q1*q2 + q3*q4), 1 - 2.0f*(q2*q2 + q3*q3)));
-    pitch = safe_asin(2.0f*(q1*q3 - q4*q2));
-    yaw = atan2f(2.0f*(q1*q4 + q2*q3), 1 - 2.0f*(q3*q3 + q4*q4));
+    roll = get_euler_roll();
+    pitch = get_euler_pitch();
+    yaw = get_euler_yaw();
 }
 
 // create eulers from a quaternion

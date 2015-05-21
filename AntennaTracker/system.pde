@@ -23,10 +23,8 @@ static void init_tracker()
     // init baro before we start the GCS, so that the CLI baro test works
     barometer.init();
 
-    // init the GCS
+    // init the GCS and start snooping for vehicle data
     gcs[0].setup_uart(serial_manager, AP_SerialManager::SerialProtocol_Console, 0);
-
-    // set up snooping on other mavlink destinations
     gcs[0].set_snoop(mavlink_snoop);
 
     // Register mavlink_delay_cb, which will run anytime you have
@@ -38,12 +36,20 @@ static void init_tracker()
     usb_connected = true;
     check_usb_mux();
 
-    // setup serial port for telem1
+    // setup serial port for telem1 and start snooping for vehicle data
     gcs[1].setup_uart(serial_manager, AP_SerialManager::SerialProtocol_MAVLink, 0);
+    gcs[1].set_snoop(mavlink_snoop);
 
 #if MAVLINK_COMM_NUM_BUFFERS > 2
-    // setup serial port for telem2
+    // setup serial port for telem2 and start snooping for vehicle data
     gcs[2].setup_uart(serial_manager, AP_SerialManager::SerialProtocol_MAVLink, 1);
+    gcs[2].set_snoop(mavlink_snoop);
+#endif
+
+#if MAVLINK_COMM_NUM_BUFFERS > 3
+    // setup serial port for fourth telemetry port (not used by default) and start snooping for vehicle data
+    gcs[3].setup_uart(serial_manager, AP_SerialManager::SerialProtocol_MAVLink, 2);
+    gcs[3].set_snoop(mavlink_snoop);
 #endif
 
     mavlink_system.sysid = g.sysid_this_mav;
@@ -179,6 +185,7 @@ static void set_mode(enum ControlMode mode)
     case AUTO:
     case MANUAL:
     case SCAN:
+    case SERVO_TEST:
         arm_servos();
         break;
 
@@ -198,6 +205,7 @@ static bool mavlink_set_mode(uint8_t mode)
     case AUTO:
     case MANUAL:
     case SCAN:
+    case SERVO_TEST:
     case STOP:
         set_mode((enum ControlMode)mode);
         return true;

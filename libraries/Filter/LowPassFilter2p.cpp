@@ -25,7 +25,7 @@
 
 float DigitalBiquadFilter::apply(float sample, const struct biquad_params &params)
 {
-    if(params.cutoff_freq == 0 || params.sample_freq == 0) {
+    if(is_zero(params.cutoff_freq) || is_zero(params.sample_freq)) {
         return sample;
     }
 

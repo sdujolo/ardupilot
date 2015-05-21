@@ -1,6 +1,6 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
-#define THISFIRMWARE "APM:Copter V3.3-dev"
+#define THISFIRMWARE "APM:Copter V3.3-rc4"
 /*
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -91,7 +91,7 @@
 // AP_HAL
 #include <AP_HAL.h>
 #include <AP_HAL_AVR.h>
-#include <AP_HAL_AVR_SITL.h>
+#include <AP_HAL_SITL.h>
 #include <AP_HAL_PX4.h>
 #include <AP_HAL_VRBRAIN.h>
 #include <AP_HAL_FLYMAPLE.h>
@@ -231,11 +231,7 @@ static DataFlash_Empty DataFlash;
 ////////////////////////////////////////////////////////////////////////////////
 // the rate we run the main loop at
 ////////////////////////////////////////////////////////////////////////////////
-#if MAIN_LOOP_RATE == 400
 static const AP_InertialSensor::Sample_rate ins_sample_rate = AP_InertialSensor::RATE_400HZ;
-#else
-static const AP_InertialSensor::Sample_rate ins_sample_rate = AP_InertialSensor::RATE_100HZ;
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Sensors
@@ -261,14 +257,21 @@ static Compass compass;
 
 AP_InertialSensor ins;
 
+////////////////////////////////////////////////////////////////////////////////
+// SONAR
+#if CONFIG_SONAR == ENABLED
+static RangeFinder sonar;
+static bool sonar_enabled = true; // enable user switch for sonar
+#endif
+
 // Inertial Navigation EKF
 #if AP_AHRS_NAVEKF_AVAILABLE
-AP_AHRS_NavEKF ahrs(ins, barometer, gps);
+AP_AHRS_NavEKF ahrs(ins, barometer, gps, sonar);
 #else
 AP_AHRS_DCM ahrs(ins, barometer, gps);
 #endif
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 SITL sitl;
 #endif
 
@@ -297,13 +300,6 @@ static float ekfNavVelGainScaler;
 static AP_SerialManager serial_manager;
 static const uint8_t num_gcs = MAVLINK_COMM_NUM_BUFFERS;
 static GCS_MAVLINK gcs[MAVLINK_COMM_NUM_BUFFERS];
-
-////////////////////////////////////////////////////////////////////////////////
-// SONAR
-#if CONFIG_SONAR == ENABLED
-static RangeFinder sonar;
-static bool sonar_enabled = true; // enable user switch for sonar
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // User variables
@@ -341,22 +337,18 @@ static union {
         uint8_t logging_started     : 1; // 6       // true if dataflash logging has started
         uint8_t land_complete       : 1; // 7       // true if we have detected a landing
         uint8_t new_radio_frame     : 1; // 8       // Set true if we have new PWM data to act on from the Radio
-        uint8_t CH7_flag            : 2; // 9,10    // ch7 aux switch : 0 is low or false, 1 is center or true, 2 is high
-        uint8_t CH8_flag            : 2; // 11,12   // ch8 aux switch : 0 is low or false, 1 is center or true, 2 is high
-        uint8_t CH9_flag            : 2; // 13,14   // ch9 aux switch : 0 is low or false, 1 is center or true, 2 is high
-        uint8_t CH10_flag           : 2; // 15,16   // ch10 aux switch : 0 is low or false, 1 is center or true, 2 is high
-        uint8_t CH11_flag           : 2; // 17,18   // ch11 aux switch : 0 is low or false, 1 is center or true, 2 is high
-        uint8_t CH12_flag           : 2; // 19,20   // ch12 aux switch : 0 is low or false, 1 is center or true, 2 is high
-        uint8_t usb_connected       : 1; // 21      // true if APM is powered from USB connection
-        uint8_t rc_receiver_present : 1; // 22      // true if we have an rc receiver present (i.e. if we've ever received an update
-        uint8_t compass_mot         : 1; // 23      // true if we are currently performing compassmot calibration
-        uint8_t motor_test          : 1; // 24      // true if we are currently performing the motors test
-        uint8_t initialised         : 1; // 25      // true once the init_ardupilot function has completed.  Extended status to GCS is not sent until this completes
-        uint8_t land_complete_maybe : 1; // 26      // true if we may have landed (less strict version of land_complete)
-        uint8_t throttle_zero       : 1; // 27      // true if the throttle stick is at zero, debounced
-        uint8_t system_time_set     : 1; // 28      // true if the system time has been set from the GPS
-        uint8_t gps_base_pos_set    : 1; // 29      // true when the gps base position has been set (used for RTK gps only)
-        enum HomeState home_state   : 2; // 30,31   // home status (unset, set, locked)
+        uint8_t usb_connected       : 1; // 9      // true if APM is powered from USB connection
+        uint8_t rc_receiver_present : 1; // 10      // true if we have an rc receiver present (i.e. if we've ever received an update
+        uint8_t compass_mot         : 1; // 11      // true if we are currently performing compassmot calibration
+        uint8_t motor_test          : 1; // 12      // true if we are currently performing the motors test
+        uint8_t initialised         : 1; // 13      // true once the init_ardupilot function has completed.  Extended status to GCS is not sent until this completes
+        uint8_t land_complete_maybe : 1; // 14      // true if we may have landed (less strict version of land_complete)
+        uint8_t throttle_zero       : 1; // 15      // true if the throttle stick is at zero, debounced, determines if pilot intends shut-down when not using motor interlock
+        uint8_t system_time_set     : 1; // 16      // true if the system time has been set from the GPS
+        uint8_t gps_base_pos_set    : 1; // 17      // true when the gps base position has been set (used for RTK gps only)
+        enum HomeState home_state   : 2; // 18,19   // home status (unset, set, locked)
+        uint8_t using_interlock     : 1; // 20      // aux switch motor interlock function is in use
+        uint8_t motor_emergency_stop: 1; // 21      // motor estop switch, shuts off motors when enabled
     };
     uint32_t value;
 } ap;
@@ -373,6 +365,13 @@ static struct {
     int8_t last_switch_position;        // switch position in previous iteration
     uint32_t last_edge_time_ms;         // system time that switch position was last changed
 } control_switch_state;
+
+static struct {
+    bool running;
+    float speed;
+    uint32_t start_ms;
+    uint32_t time_ms;
+} takeoff_state;
 
 static RCMapper rcmap;
 
@@ -718,63 +717,61 @@ AP_Param param_loader(var_info);
   
  */
 static const AP_Scheduler::Task scheduler_tasks[] PROGMEM = {
-    { rc_loop,               4,     10 },
-    { throttle_loop,         8,     45 },
-    { update_GPS,            8,     90 },
+    { rc_loop,               4,    130 },   // 0
+    { throttle_loop,         8,     75 },   // 1
+    { update_GPS,            8,    200 },   // 2
 #if OPTFLOW == ENABLED
-    { update_optical_flow,   2,     20 },
+    { update_optical_flow,   2,    160 },   // 3
 #endif
-    { update_batt_compass,  40,     72 },
-    { read_aux_switches,    40,      5 },
-    { arm_motors_check,     40,      1 },
-    { auto_trim,            40,     14 },
-    { update_altitude,      40,    100 },
-    { run_nav_updates,       8,     80 },
-    { update_thr_average,   40,     10 },
-    { three_hz_loop,       133,      9 },
-    { compass_accumulate,    8,     42 },
-    { barometer_accumulate,  8,     25 },
+    { update_batt_compass,  40,    120 },   // 4
+    { read_aux_switches,    40,     50 },   // 5
+    { arm_motors_check,     40,     50 },   // 6
+    { auto_trim,            40,     75 },   // 7
+    { update_altitude,      40,    140 },   // 8
+    { run_nav_updates,       8,    100 },   // 9
+    { update_thr_average,    4,     90 },   // 10
+    { three_hz_loop,       133,     75 },   // 11
+    { compass_accumulate,    8,    100 },   // 12
+    { barometer_accumulate,  8,     90 },   // 13
 #if FRAME_CONFIG == HELI_FRAME
-    { check_dynamic_flight,  8,     10 },
+    { check_dynamic_flight,  8,     75 },
 #endif
-    { update_notify,         8,     10 },
-    { one_hz_loop,         400,     42 },
-    { ekf_check,            40,      2 },
-    { crash_check,          40,      2 },
-    { landinggear_update,   40,      1 },
-    { gcs_check_input,	     8,    550 },
-    { gcs_send_heartbeat,  400,    150 },
-    { gcs_send_deferred,     8,    720 },
-    { gcs_data_stream_send,  8,    950 },
-#if COPTER_LEDS == ENABLED
-    { update_copter_leds,   40,      5 },
-#endif
-    { update_mount,          8,     45 },
-    { ten_hz_logging_loop,  40,     30 },
-    { fifty_hz_logging_loop, 8,     22 },
-    { full_rate_logging_loop,1,     22 },
-    { perf_update,        4000,     20 },
-    { read_receiver_rssi,   40,      5 },
+    { update_notify,         8,     90 },   // 14
+    { one_hz_loop,         400,    100 },   // 15
+    { ekf_check,            40,     75 },   // 16
+    { crash_check,          40,     75 },   // 17
+    { landinggear_update,   40,     75 },   // 18
+    { lost_vehicle_check,   40,     50 },   // 19
+    { gcs_check_input,       1,    180 },   // 20
+    { gcs_send_heartbeat,  400,    110 },   // 21
+    { gcs_send_deferred,     8,    550 },   // 22
+    { gcs_data_stream_send,  8,    550 },   // 23
+    { update_mount,          8,     75 },   // 24
+    { ten_hz_logging_loop,  40,    350 },   // 25
+    { fifty_hz_logging_loop, 8,    110 },   // 26
+    { full_rate_logging_loop,1,    100 },   // 27
+    { perf_update,        4000,     75 },   // 28
+    { read_receiver_rssi,   40,     75 },   // 29
 #if FRSKY_TELEM_ENABLED == ENABLED
-    { frsky_telemetry_send, 80,     10 },
+    { frsky_telemetry_send, 80,     75 },   // 30
 #endif
 #if EPM_ENABLED == ENABLED
-    { epm_update,           40,     10 },
+    { epm_update,           40,     75 },   // 31
 #endif
 #ifdef USERHOOK_FASTLOOP
-    { userhook_FastLoop,     4,     10 },
+    { userhook_FastLoop,     4,     75 },
 #endif
 #ifdef USERHOOK_50HZLOOP
-    { userhook_50Hz,         8,     10 },
+    { userhook_50Hz,         8,     75 },
 #endif
 #ifdef USERHOOK_MEDIUMLOOP
-    { userhook_MediumLoop,  40,     10 },
+    { userhook_MediumLoop,  40,     75 },
 #endif
 #ifdef USERHOOK_SLOWLOOP
-    { userhook_SlowLoop,    120,    10 },
+    { userhook_SlowLoop,    120,    75 },
 #endif
 #ifdef USERHOOK_SUPERSLOWLOOP
-    { userhook_SuperSlowLoop,400,   10 },
+    { userhook_SuperSlowLoop,400,   75 },
 #endif
 };
 
@@ -791,7 +788,7 @@ void setup()
     init_ardupilot();
 
     // initialise the main loop scheduler
-    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]));
+    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]), NULL);
 
     // setup initial performance counters
     perf_info_reset();
@@ -842,7 +839,7 @@ void loop()
     perf_info_check_loop_time(timer - fast_loopTimer);
 
     // used by PI Loops
-    G_Dt                    = (float)(timer - fast_loopTimer) / 1000000.f;
+    G_Dt                    = (float)(timer - fast_loopTimer) / 1000000.0f;
     fast_loopTimer          = timer;
 
     // for mainloop failure monitoring
@@ -915,7 +912,7 @@ static void throttle_loop()
     read_inertial_altitude();
 
     // update throttle_low_comp value (controls priority of throttle vs attitude control)
-    update_throttle_low_comp();
+    update_throttle_thr_mix();
 
     // check auto_armed status
     update_auto_armed();
@@ -1082,12 +1079,11 @@ static void one_hz_loop()
 #endif
 #endif
 
-#if AC_FENCE == ENABLED
-    // set fence altitude limit in position controller
-    if ((fence.get_enabled_fences() & AC_FENCE_TYPE_ALT_MAX) != 0) {
-        pos_control.set_alt_max(pv_alt_above_origin(fence.get_safe_alt()*100.0f));
-    }
-#endif
+    // update position controller alt limits
+    update_poscon_alt_max();
+
+    // enable/disable raw gyro/accel logging
+    ins.set_raw_logging(should_log(MASK_LOG_IMU_RAW));
 }
 
 // called at 50hz
@@ -1115,9 +1111,6 @@ static void update_GPS(void)
     if (gps_updated) {
         // set system time if necessary
         set_system_time_from_GPS();
-
-        // check gps base position (used for RTK only)
-        check_gps_base_pos();
 
         // checks to initialise home and take location based pictures
         if (gps.status() >= AP_GPS::GPS_OK_FIX_3D) {

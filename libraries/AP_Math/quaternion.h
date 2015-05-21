@@ -80,14 +80,26 @@ public:
 
     void rotate_fast(const Vector3f &v);
 
+    // get euler roll angle
+    float       get_euler_roll() const;
+
+    // get euler pitch angle
+    float       get_euler_pitch() const;
+
+    // get euler yaw angle
+    float       get_euler_yaw() const;
 
     // create eulers from a quaternion
     void        to_euler(float &roll, float &pitch, float &yaw) const;
 
+    // create eulers from a quaternion
     void        to_vector312(float &roll, float &pitch, float &yaw) const;
 
     float length(void) const;
     void normalize();
+
+    // initialise the quaternion to no rotation
+    void initialise() { q1 = 1.0f; q2 = q3 = q4 = 0.0f; }
 
     Quaternion inverse(void) const;
 

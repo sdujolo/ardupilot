@@ -43,7 +43,7 @@ static const struct {
 } pin_scaling[] = {
 #ifdef CONFIG_ARCH_BOARD_PX4FMU_V1
     // PX4 has 4 FMU analog input pins
-    { 10, (5.7*3.3)/4096 }, // FMU battery on multi-connector pin 5,
+    { 10, (5.7f*3.3f)/4096 }, // FMU battery on multi-connector pin 5,
                             // 5.7:1 scaling
     { 11,  6.6f/4096  }, // analog airspeed input, 2:1 scaling
     { 12,  3.3f/4096  }, // analog2, on SPI port pin 3
@@ -361,11 +361,8 @@ void PX4AnalogIn::_timer_tick(void)
             if (system_power.hipower_5V_OC) flags |= MAV_POWER_STATUS_PERIPH_HIPOWER_OVERCURRENT;
             if (_power_flags != 0 && 
                 _power_flags != flags && 
-                hal.scheduler->millis() > 5000) {
-                // the power status has changed since boot, and more
-                // than 5s after power on. The 5 second threshold is
-                // for users who have multiple switches, and they
-                // don't switch both at the same time.
+                hal.util->get_soft_armed()) {
+                // the power status has changed while armed
                 flags |= MAV_POWER_STATUS_CHANGED;
             }
             _power_flags = flags;
@@ -379,7 +376,7 @@ AP_HAL::AnalogSource* PX4AnalogIn::channel(int16_t pin)
 {
     for (uint8_t j=0; j<PX4_ANALOG_MAX_CHANNELS; j++) {
         if (_channels[j] == NULL) {
-            _channels[j] = new PX4AnalogSource(pin, 0.0);
+            _channels[j] = new PX4AnalogSource(pin, 0.0f);
             return _channels[j];
         }
     }

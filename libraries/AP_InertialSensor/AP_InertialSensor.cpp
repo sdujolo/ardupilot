@@ -7,6 +7,7 @@
 #include <AP_HAL.h>
 #include <AP_Notify.h>
 #include <AP_Vehicle.h>
+#include <AP_Math.h>
 
 /*
   enable TIMING_DEBUG to track down scheduling issues with the main
@@ -279,9 +280,12 @@ AP_InertialSensor::AP_InertialSensor() :
     _accel(),
     _gyro(),
     _board_orientation(ROTATION_NONE),
+    _primary_gyro(0),
+    _primary_accel(0),
     _hil_mode(false),
-    _have_3D_calibration(false),
-    _calibrating(false)
+    _calibrating(false),
+    _log_raw_data(false),
+    _dataflash(NULL)
 {
     AP_Param::setup_object_defaults(this, var_info);        
     for (uint8_t i=0; i<INS_MAX_BACKENDS; i++) {
@@ -337,10 +341,6 @@ AP_InertialSensor::init( Start_style style,
             _accel_scale[i].set(Vector3f(1,1,1));
         }
     }
-
-    // remember whether we have 3D calibration so this can be used for
-    // AHRS health
-    check_3D_calibration();
 
     if (WARM_START != style) {
         // do cold-start calibration for gyro only
@@ -426,6 +426,26 @@ AP_InertialSensor::_detect_backends(void)
 
     // set the product ID to the ID of the first backend
     _product_id.set(_backends[0]->product_id());
+}
+
+/*
+  _calculate_trim - calculates the x and y trim angles. The
+  accel_sample must be correctly scaled, offset and oriented for the
+  board 
+*/
+bool AP_InertialSensor::_calculate_trim(const Vector3f &accel_sample, float& trim_roll, float& trim_pitch)
+{
+    trim_pitch = atan2f(accel_sample.x, pythagorous2(accel_sample.y, accel_sample.z));
+    trim_roll = atan2f(-accel_sample.y, -accel_sample.z);
+    if (fabsf(trim_roll) > radians(10) || 
+        fabsf(trim_pitch) > radians(10)) {
+        hal.console->println_P(PSTR("trim over maximum of 10 degrees"));
+        return false;
+    }
+    hal.console->printf_P(PSTR("Trim OK: roll=%.2f pitch=%.2f\n"),
+                          degrees(trim_roll),
+                          degrees(trim_pitch));
+    return true;
 }
 
 #if !defined( __AVR_ATmega1280__ )
@@ -554,11 +574,11 @@ bool AP_InertialSensor::calibrate_accel(AP_InertialSensor_UserInteract* interact
         bool success = _calibrate_accel(samples[k], new_offsets[k], new_scaling[k], saved_orientation);
 
         interact->printf_P(PSTR("Offsets[%u]: %.2f %.2f %.2f\n"),
-                           (unsigned)k,
-                           new_offsets[k].x, new_offsets[k].y, new_offsets[k].z);
+                            (unsigned)k,
+                           (double)new_offsets[k].x, (double)new_offsets[k].y, (double)new_offsets[k].z);
         interact->printf_P(PSTR("Scaling[%u]: %.2f %.2f %.2f\n"),
                            (unsigned)k,
-                           new_scaling[k].x, new_scaling[k].y, new_scaling[k].z);
+                           (double)new_scaling[k].x, (double)new_scaling[k].y, (double)new_scaling[k].z);
         if (success) num_ok++;
     }
 
@@ -570,18 +590,27 @@ bool AP_InertialSensor::calibrate_accel(AP_InertialSensor_UserInteract* interact
             _accel_offset[k].set(new_offsets[k]);
             _accel_scale[k].set(new_scaling[k]);
         }
+        for (uint8_t k=num_accels; k<INS_MAX_INSTANCES; k++) {
+            // clear unused accelerometer's scaling and offsets
+            _accel_offset[k] = Vector3f(0,0,0);
+            _accel_scale[k] = Vector3f(0,0,0);
+        }
         _save_parameters();
-
-        check_3D_calibration();
 
         /*
           calculate the trims as well from primary accels 
           We use the original board rotation for this sample
         */
         Vector3f level_sample = samples[0][0];
+        level_sample.x *= new_scaling[0].x;
+        level_sample.y *= new_scaling[0].y;
+        level_sample.z *= new_scaling[0].z;
+        level_sample -= new_offsets[0];
         level_sample.rotate(saved_orientation);
 
-        _calculate_trim(level_sample, trim_roll, trim_pitch);
+        if (!_calculate_trim(level_sample, trim_roll, trim_pitch)) {
+            goto failed;
+        }
 
         _board_orientation = saved_orientation;
 
@@ -601,39 +630,6 @@ failed:
     return false;
 }
 #endif
-
-/*
-  check if the accelerometers are calibrated in 3D. Called on startup
-  and any accel cal
- */
-void AP_InertialSensor::check_3D_calibration()
-{
-    _have_3D_calibration = false;
-    // check each accelerometer has offsets saved
-    for (uint8_t i=0; i<get_accel_count(); i++) {
-        // exactly 0.0 offset is extremely unlikely
-        if (_accel_offset[i].get().is_zero()) {
-            return;
-        }
-        // exactly 1.0 scaling is extremely unlikely
-        const Vector3f &scaling = _accel_scale[i].get();
-        if (fabsf(scaling.x - 1.0f) < 0.00001f &&
-            fabsf(scaling.y - 1.0f) < 0.00001f &&
-            fabsf(scaling.z - 1.0f) < 0.00001f) {
-            return;
-        }
-    }
-    // if we got this far the accelerometers must have been calibrated
-    _have_3D_calibration = true;
-}
-
-/*
-  return true if we have 3D calibration values
- */
-bool AP_InertialSensor::calibrated() const
-{
-    return _have_3D_calibration;
-}
 
 void
 AP_InertialSensor::init_gyro()
@@ -677,6 +673,98 @@ bool AP_InertialSensor::get_accel_health_all(void) const
     }
     // return true if we have at least one accel
     return (get_accel_count() > 0);
+}
+
+
+/*
+  calculate the trim_roll and trim_pitch. This is used for redoing the
+  trim without needing a full accel cal
+ */
+bool AP_InertialSensor::calibrate_trim(float &trim_roll, float &trim_pitch)
+{
+    Vector3f level_sample;
+
+    // exit immediately if calibration is already in progress
+    if (_calibrating) {
+        return false;
+    }
+
+    _calibrating = true;
+
+    const uint8_t update_dt_milliseconds = (uint8_t)(1000.0f/get_sample_rate()+0.5f);
+
+    // wait 100ms for ins filter to rise
+    for (uint8_t k=0; k<100/update_dt_milliseconds; k++) {
+        wait_for_sample();
+        update();
+        hal.scheduler->delay(update_dt_milliseconds);
+    }
+
+    uint32_t num_samples = 0;
+    while (num_samples < 400/update_dt_milliseconds) {
+        wait_for_sample();
+        // read samples from ins
+        update();
+        // capture sample
+        Vector3f samp;
+        samp = get_accel(0);
+        level_sample += samp;
+        if (!get_accel_health(0)) {
+            goto failed;
+        }
+        hal.scheduler->delay(update_dt_milliseconds);
+        num_samples++;
+    }
+    level_sample /= num_samples;
+
+    if (!_calculate_trim(level_sample, trim_roll, trim_pitch)) {
+        goto failed;
+    }
+
+    _calibrating = false;
+    return true;
+
+failed:
+    _calibrating = false;
+    return false;    
+}
+
+/*
+  check if the accelerometers are calibrated in 3D and that current number of accels matched number when calibrated
+ */
+bool AP_InertialSensor::accel_calibrated_ok_all() const
+{
+    // check each accelerometer has offsets saved
+    for (uint8_t i=0; i<get_accel_count(); i++) {
+        // exactly 0.0 offset is extremely unlikely
+        if (_accel_offset[i].get().is_zero()) {
+            return false;
+        }
+        // exactly 1.0 scaling is extremely unlikely
+        const Vector3f &scaling = _accel_scale[i].get();
+        if (is_equal(scaling.x,1.0f) && is_equal(scaling.y,1.0f) && is_equal(scaling.z,1.0f)) {
+            return false;
+        }
+        // zero scaling also indicates not calibrated
+        if (_accel_scale[i].get().is_zero()) {
+            return false;
+        }
+    }
+
+    // check calibrated accels matches number of accels (no unused accels should have offsets or scaling)
+    if (get_accel_count() < INS_MAX_INSTANCES) {
+        for (uint8_t i=get_accel_count(); i<INS_MAX_INSTANCES; i++) {
+            const Vector3f &scaling = _accel_scale[i].get();
+            bool have_scaling = (!is_zero(scaling.x) && !is_equal(scaling.x,1.0f)) || (!is_zero(scaling.y) && !is_equal(scaling.y,1.0f)) || (!is_zero(scaling.z) && !is_equal(scaling.z,1.0f));
+            bool have_offsets = !_accel_offset[i].get().is_zero();
+            if (have_scaling || have_offsets) {
+                return false;
+            }
+        }
+    }
+
+    // if we got this far the accelerometers must have been calibrated
+    return true;
 }
 
 void
@@ -796,7 +884,7 @@ AP_InertialSensor::_init_gyro()
     for (uint8_t k=0; k<num_gyros; k++) {
         if (!converged[k]) {
             hal.console->printf_P(PSTR("gyro[%u] did not converge: diff=%f dps\n"),
-                                  (unsigned)k, ToDeg(best_diff[k]));
+                                  (unsigned)k, (double)ToDeg(best_diff[k]));
             _gyro_offset[k] = best_avg[k];
             // flag calibration as failed for this gyro
             _gyro_cal_ok[k] = false;
@@ -857,7 +945,7 @@ bool AP_InertialSensor::_check_sample_range(const Vector3f accel_sample[6], enum
     }
     Vector3f range = max_sample - min_sample;
     interact->printf_P(PSTR("AccelRange: %.1f %.1f %.1f"),
-                       range.x, range.y, range.z);
+            (double)range.x, (double)range.y, (double)range.z);
     bool ok = (range.x >= min_range && 
                range.y >= min_range && 
                range.z >= min_range);
@@ -876,8 +964,8 @@ bool AP_InertialSensor::_calibrate_accel(const Vector3f accel_sample[6],
 {
     int16_t i;
     int16_t num_iterations = 0;
-    float eps = 0.000000001;
-    float change = 100.0;
+    float eps = 0.000000001f;
+    float change = 100.0f;
     float data[3];
     float beta[6];
     float delta[6];
@@ -942,7 +1030,7 @@ void AP_InertialSensor::_calibrate_update_matrices(float dS[6], float JS[6][6],
 {
     int16_t j, k;
     float dx, b;
-    float residual = 1.0;
+    float residual = 1.0f;
     float jacobian[6];
     
     for( j=0; j<3; j++ ) {
@@ -986,7 +1074,7 @@ void AP_InertialSensor::_calibrate_find_delta(float dS[6], float JS[6][6], float
         //eliminate all nonzero entries below JS[i][i]
         for( j=i+1; j<6; j++ ) {
             mu = JS[i][j]/JS[i][i];
-            if( mu != 0.0f ) {
+            if( !is_zero(mu) ) {
                 dS[j] -= mu*dS[i];
                 for( k=j; k<6; k++ ) {
                     JS[k][j] -= mu*JS[k][i];
@@ -1009,33 +1097,6 @@ void AP_InertialSensor::_calibrate_find_delta(float dS[6], float JS[6][6], float
 
     for( i=0; i<6; i++ ) {
         delta[i] = dS[i];
-    }
-}
-
-// _calculate_trim  - calculates the x and y trim angles (in radians) given a raw accel sample (i.e. no scaling or offsets applied) taken when the vehicle was level
-void AP_InertialSensor::_calculate_trim(const Vector3f &accel_sample, float& trim_roll, float& trim_pitch)
-{
-    // scale sample and apply offsets
-    const Vector3f &accel_scale = _accel_scale[0].get();
-    const Vector3f &accel_offsets = _accel_offset[0].get();
-    Vector3f scaled_accels_x( accel_sample.x * accel_scale.x - accel_offsets.x,
-                              0,
-                              accel_sample.z * accel_scale.z - accel_offsets.z );
-    Vector3f scaled_accels_y( 0,
-                              accel_sample.y * accel_scale.y - accel_offsets.y,
-                              accel_sample.z * accel_scale.z - accel_offsets.z );
-
-    // calculate x and y axis angle (i.e. roll and pitch angles)
-    Vector3f vertical = Vector3f(0,0,-1);
-    trim_roll = scaled_accels_y.angle(vertical);
-    trim_pitch = scaled_accels_x.angle(vertical);
-
-    // angle call doesn't return the sign so take care of it here
-    if( scaled_accels_y.y > 0 ) {
-        trim_roll = -trim_roll;
-    }
-    if( scaled_accels_x.x < 0 ) {
-        trim_pitch = -trim_pitch;
     }
 }
 
@@ -1232,6 +1293,9 @@ void AP_InertialSensor::set_accel(uint8_t instance, const Vector3f &accel)
         if (_accel_count <= instance) {
             _accel_count = instance+1;
         }
+        if (!_accel_healthy[_primary_accel]) {
+            _primary_accel = instance;
+        }
     }
 }
 
@@ -1247,6 +1311,9 @@ void AP_InertialSensor::set_gyro(uint8_t instance, const Vector3f &gyro)
         if (_gyro_count <= instance) {
             _gyro_count = instance+1;
             _gyro_cal_ok[instance] = true;
+        }
+        if (!_accel_healthy[_primary_accel]) {
+            _primary_accel = instance;
         }
     }
 }

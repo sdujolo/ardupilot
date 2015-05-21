@@ -109,8 +109,8 @@ static void auto_takeoff_start(float final_alt_above_home)
 //      called by auto_run at 100hz or more
 static void auto_takeoff_run()
 {
-    // if not auto armed set throttle to zero and exit immediately
-    if(!ap.auto_armed) {
+    // if not auto armed or motor interlock not enabled set throttle to zero and exit immediately
+    if(!ap.auto_armed || !motors.get_interlock()) {
         // initialise wpnav targets
         wp_nav.shift_wp_origin_to_current_pos();
         // reset attitude control targets
@@ -156,8 +156,8 @@ static void auto_wp_start(const Vector3f& destination)
 //      called by auto_run at 100hz or more
 static void auto_wp_run()
 {
-    // if not auto armed set throttle to zero and exit immediately
-    if(!ap.auto_armed) {
+    // if not auto armed or motor interlock not enabled set throttle to zero and exit immediately
+    if(!ap.auto_armed || !motors.get_interlock()) {
         // To-Do: reset waypoint origin to current location because copter is probably on the ground so we don't want it lurching left or right on take-off
         //    (of course it would be better if people just used take-off)
         attitude_control.set_throttle_out_unstabilized(0,true,g.throttle_filt);
@@ -171,7 +171,7 @@ static void auto_wp_run()
     if (!failsafe.radio) {
         // get pilot's desired yaw rate
         target_yaw_rate = get_pilot_desired_yaw_rate(g.rc_4.control_in);
-        if (target_yaw_rate != 0) {
+        if (!is_zero(target_yaw_rate)) {
             set_auto_yaw_mode(AUTO_YAW_HOLD);
         }
     }
@@ -212,8 +212,8 @@ static void auto_spline_start(const Vector3f& destination, bool stopped_at_start
 //      called by auto_run at 100hz or more
 static void auto_spline_run()
 {
-    // if not auto armed set throttle to zero and exit immediately
-    if(!ap.auto_armed) {
+    // if not auto armed or motor interlock not enabled set throttle to zero and exit immediately
+    if(!ap.auto_armed || !motors.get_interlock()) {
         // To-Do: reset waypoint origin to current location because copter is probably on the ground so we don't want it lurching left or right on take-off
         //    (of course it would be better if people just used take-off)
         attitude_control.set_throttle_out_unstabilized(0,true,g.throttle_filt);
@@ -227,7 +227,7 @@ static void auto_spline_run()
     if (!failsafe.radio) {
         // get pilot's desired yaw rate
         target_yaw_rate = get_pilot_desired_yaw_rate(g.rc_4.control_in);
-        if (target_yaw_rate != 0) {
+        if (!is_zero(target_yaw_rate)) {
             set_auto_yaw_mode(AUTO_YAW_HOLD);
         }
     }
@@ -281,7 +281,7 @@ static void auto_land_run()
     int16_t roll_control = 0, pitch_control = 0;
     float target_yaw_rate = 0;
 
-    // if not auto armed set throttle to zero and exit immediately
+    // if not auto armed or motor interlock not enabled set throttle to zero and exit immediately
     if(!ap.auto_armed || ap.land_complete) {
         attitude_control.set_throttle_out_unstabilized(0,true,g.throttle_filt);
         // set target to current position
@@ -447,8 +447,8 @@ bool auto_loiter_start()
 //      called by auto_run at 100hz or more
 void auto_loiter_run()
 {
-    // if not auto armed set throttle to zero and exit immediately
-    if(!ap.auto_armed || ap.land_complete) {
+    // if not auto armed or motor interlock not enabled set throttle to zero and exit immediately
+    if(!ap.auto_armed || ap.land_complete || !motors.get_interlock()) {
         attitude_control.set_throttle_out_unstabilized(0,true,g.throttle_filt);
         return;
     }
@@ -550,7 +550,7 @@ static void set_auto_yaw_look_at_heading(float angle_deg, float turn_rate_dps, i
     }
 
     // get turn speed
-    if (turn_rate_dps == 0 ) {
+    if (is_zero(turn_rate_dps)) {
         // default to regular auto slew rate
         yaw_look_at_heading_slew = AUTO_YAW_SLEW_RATE;
     }else{

@@ -25,7 +25,7 @@
 #include <AP_Declination.h>
 #include <AP_Airspeed.h>
 #include <AP_HAL_AVR.h>
-#include <AP_HAL_AVR_SITL.h>
+#include <AP_HAL_SITL.h>
 #include <AP_HAL_Linux.h>
 #include <AP_HAL_FLYMAPLE.h>
 #include <AP_HAL_PX4.h>
@@ -34,6 +34,7 @@
 #include <AP_NavEKF.h>
 #include <AP_Scheduler.h>
 #include <AP_BattMonitor.h>
+#include <AP_RangeFinder.h>
 
 const AP_HAL::HAL& hal = AP_HAL_BOARD_DRIVER;
 

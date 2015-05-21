@@ -378,9 +378,10 @@ static void Log_Write_Attitude()
  #endif
     DataFlash.Log_Write_AHRS2(ahrs);
 #endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
     sitl.Log_Write_SIMSTATE(DataFlash);
 #endif
+    DataFlash.Log_Write_POS(ahrs);
 }
 
 struct PACKED log_Rate {
@@ -458,6 +459,20 @@ static void Log_Write_Startup()
         LOG_PACKET_HEADER_INIT(LOG_STARTUP_MSG)
     };
     DataFlash.WriteBlock(&pkt, sizeof(pkt));
+
+    Log_Write_EntireMission();
+}
+
+static void Log_Write_EntireMission()
+{
+    DataFlash.Log_Write_Message_P(PSTR("New mission"));
+
+    AP_Mission::Mission_Command cmd;
+    for (uint16_t i = 0; i < mission.num_commands(); i++) {
+        if (mission.read_cmd_from_storage(i,cmd)) {
+            Log_Write_Cmd(cmd);
+        }
+    }
 }
 
 struct PACKED log_Event {
@@ -597,6 +612,31 @@ static void Log_Write_Baro(void)
     DataFlash.Log_Write_Baro(barometer);
 }
 
+struct PACKED log_ParameterTuning {
+    LOG_PACKET_HEADER;
+    uint32_t time_ms;
+    uint8_t  parameter;     // parameter we are tuning, e.g. 39 is CH6_CIRCLE_RATE
+    float    tuning_value;  // normalized value used inside tuning() function
+    int16_t  control_in;    // raw tune input value
+    int16_t  tuning_low;    // tuning low end value
+    int16_t  tuning_high;   // tuning high end value
+};
+
+static void Log_Write_Parameter_Tuning(uint8_t param, float tuning_val, int16_t control_in, int16_t tune_low, int16_t tune_high)
+{
+    struct log_ParameterTuning pkt_tune = {
+        LOG_PACKET_HEADER_INIT(LOG_PARAMTUNE_MSG),
+        time_ms        : hal.scheduler->millis(),
+        parameter      : param,
+        tuning_value   : tuning_val,
+        control_in     : control_in,
+        tuning_low     : tune_low,
+        tuning_high    : tune_high
+    };
+
+    DataFlash.WriteBlock(&pkt_tune, sizeof(pkt_tune));
+}
+
 static const struct LogStructure log_structure[] PROGMEM = {
     LOG_COMMON_STRUCTURES,
 #if AUTOTUNE_ENABLED == ENABLED
@@ -605,6 +645,8 @@ static const struct LogStructure log_structure[] PROGMEM = {
     { LOG_AUTOTUNEDETAILS_MSG, sizeof(log_AutoTuneDetails),
       "ATDE", "Iff",          "TimeMS,Angle,Rate" },
 #endif
+    { LOG_PARAMTUNE_MSG, sizeof(log_ParameterTuning),
+      "PTUN", "IBfHHH",          "TimeMS,Param,TunVal,CtrlIn,TunLo,TunHi" },  
     { LOG_OPTFLOW_MSG, sizeof(log_Optflow),       
       "OF",   "IBffff",   "TimeMS,Qual,flowX,flowY,bodyX,bodyY" },
     { LOG_NAV_TUNING_MSG, sizeof(log_Nav_Tuning),       
@@ -685,6 +727,7 @@ static void start_logging()
 #else // LOGGING_ENABLED
 
 static void Log_Write_Startup() {}
+static void Log_Write_EntireMission() {}
 #if AUTOTUNE_ENABLED == ENABLED
 static void Log_Write_AutoTune(uint8_t axis, uint8_t tune_step, float rate_target, float rate_min, float rate_max, float new_gain_rp, float new_gain_rd, float new_gain_sp) {}
 static void Log_Write_AutoTuneDetails(float angle_cd, float rate_cds) {}

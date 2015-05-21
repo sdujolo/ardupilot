@@ -158,8 +158,8 @@ static void guided_set_destination_posvel(const Vector3f& destination, const Vec
 // should be called at 100hz or more
 static void guided_run()
 {
-    // if not auto armed set throttle to zero and exit immediately
-    if(!ap.auto_armed) {
+    // if not auto armed or motors not enabled set throttle to zero and exit immediately
+    if(!ap.auto_armed || !motors.get_interlock()) {
         // To-Do: reset waypoint controller?
         attitude_control.set_throttle_out_unstabilized(0,true,g.throttle_filt);
         // To-Do: handle take-offs - these may not only be immediately after auto_armed becomes true
@@ -195,8 +195,8 @@ static void guided_run()
 //      called by guided_run at 100hz or more
 static void guided_takeoff_run()
 {
-    // if not auto armed set throttle to zero and exit immediately
-    if(!ap.auto_armed) {
+    // if not auto armed or motors interlock not enabled set throttle to zero and exit immediately
+    if(!ap.auto_armed || !motors.get_interlock()) {
         // initialise wpnav targets
         wp_nav.shift_wp_origin_to_current_pos();
         // reset attitude control targets
@@ -232,7 +232,7 @@ static void guided_pos_control_run()
     if (!failsafe.radio) {
         // get pilot's desired yaw rate
         target_yaw_rate = get_pilot_desired_yaw_rate(g.rc_4.control_in);
-        if (target_yaw_rate != 0) {
+        if (!is_zero(target_yaw_rate)) {
             set_auto_yaw_mode(AUTO_YAW_HOLD);
         }
     }
@@ -262,7 +262,7 @@ static void guided_vel_control_run()
     if (!failsafe.radio) {
         // get pilot's desired yaw rate
         target_yaw_rate = get_pilot_desired_yaw_rate(g.rc_4.control_in);
-        if (target_yaw_rate != 0) {
+        if (!is_zero(target_yaw_rate)) {
             set_auto_yaw_mode(AUTO_YAW_HOLD);
         }
     }
@@ -301,7 +301,7 @@ static void guided_posvel_control_run()
     if (!failsafe.radio) {
         // get pilot's desired yaw rate
         target_yaw_rate = get_pilot_desired_yaw_rate(g.rc_4.control_in);
-        if (target_yaw_rate != 0) {
+        if (!is_zero(target_yaw_rate)) {
             set_auto_yaw_mode(AUTO_YAW_HOLD);
         }
     }
@@ -331,8 +331,9 @@ static void guided_posvel_control_run()
 
         // run position controller
         pos_control.update_xy_controller(AC_PosControl::XY_MODE_POS_AND_VEL_FF, ekfNavVelGainScaler);
-        pos_control.update_z_controller();
     }
+
+    pos_control.update_z_controller();
 
     // call attitude controller
     if (auto_yaw_mode == AUTO_YAW_HOLD) {
@@ -388,12 +389,12 @@ static bool guided_limit_check()
     const Vector3f& curr_pos = inertial_nav.get_position();
 
     // check if we have gone below min alt
-    if ((guided_limit.alt_min_cm != 0.0f) && (curr_pos.z < guided_limit.alt_min_cm)) {
+    if (!is_zero(guided_limit.alt_min_cm) && (curr_pos.z < guided_limit.alt_min_cm)) {
         return true;
     }
 
     // check if we have gone above max alt
-    if ((guided_limit.alt_max_cm != 0.0f) && (curr_pos.z > guided_limit.alt_max_cm)) {
+    if (!is_zero(guided_limit.alt_max_cm) && (curr_pos.z > guided_limit.alt_max_cm)) {
         return true;
     }
 

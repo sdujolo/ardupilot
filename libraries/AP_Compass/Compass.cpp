@@ -276,11 +276,11 @@ const AP_Param::GroupInfo Compass::var_info[] PROGMEM = {
 //
 Compass::Compass(void) :
     _last_update_usec(0),
-    _null_init_done(false),
-    _thr_or_curr(0.0f),
     _backend_count(0),
     _compass_count(0),
     _board_orientation(ROTATION_NONE),
+    _null_init_done(false),
+    _thr_or_curr(0.0f),
     _hil_mode(false)
 {
     AP_Param::setup_object_defaults(this, var_info);
@@ -533,7 +533,7 @@ bool Compass::configured(uint8_t i)
     }
 
     // exit immediately if all offsets are zero
-    if (get_offsets(i).length() == 0.0f) {
+    if (is_zero(get_offsets(i).length())) {
         return false;
     }
 
@@ -568,45 +568,48 @@ bool Compass::configured(void)
 
 // Update raw magnetometer values from HIL data
 //
-void Compass::setHIL(float roll, float pitch, float yaw)
+void Compass::setHIL(uint8_t instance, float roll, float pitch, float yaw)
 {
     Matrix3f R;
 
     // create a rotation matrix for the given attitude
     R.from_euler(roll, pitch, yaw);
 
-    if (_hil.last_declination != get_declination()) {
+    if (!is_equal(_hil.last_declination,get_declination())) {
         _setup_earth_field();
         _hil.last_declination = get_declination();
     }
 
     // convert the earth frame magnetic vector to body frame, and
     // apply the offsets
-    _hil.field = R.mul_transpose(_hil.Bearth);
+    _hil.field[instance] = R.mul_transpose(_hil.Bearth);
 
     // apply default board orientation for this compass type. This is
     // a noop on most boards
-    _hil.field.rotate(MAG_BOARD_ORIENTATION);
+    _hil.field[instance].rotate(MAG_BOARD_ORIENTATION);
 
     // add user selectable orientation
-    _hil.field.rotate((enum Rotation)_state[0].orientation.get());
+    _hil.field[instance].rotate((enum Rotation)_state[0].orientation.get());
 
     if (!_state[0].external) {
         // and add in AHRS_ORIENTATION setting if not an external compass
-        _hil.field.rotate(_board_orientation);
+        _hil.field[instance].rotate(_board_orientation);
     }
+    _hil.healthy[instance] = true;
 }
 
 // Update raw magnetometer values from HIL mag vector
 //
-void Compass::setHIL(const Vector3f &mag)
+void Compass::setHIL(uint8_t instance, const Vector3f &mag)
 {
-    _hil.field = mag;
+    _hil.field[instance] = mag;
+    _hil.healthy[instance] = true;
     _last_update_usec = hal.scheduler->micros();
 }
 
-const Vector3f& Compass::getHIL() const {
-    return _hil.field;
+const Vector3f& Compass::getHIL(uint8_t instance) const 
+{
+    return _hil.field[instance];
 }
 
 // setup _Bearth

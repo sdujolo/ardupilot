@@ -20,9 +20,13 @@
 #include <AP_Common.h>
 #include <AP_HAL.h>
 #include <AP_Param.h>
+#include <AP_Math.h>
 
 // Maximum number of range finder instances available on this platform
 #define RANGEFINDER_MAX_INSTANCES 2
+#define RANGEFINDER_GROUND_CLEARANCE_CM_DEFAULT 10
+#define RANGEFINDER_PREARM_ALT_MAX_CM           200
+#define RANGEFINDER_PREARM_REQUIRED_CHANGE_CM   50
 
 class AP_RangeFinder_Backend; 
  
@@ -54,6 +58,13 @@ public:
         FUNCTION_HYPERBOLA = 2
     };
 
+    enum RangeFinder_Status {
+        RangeFinder_NotConnected = 0,
+        RangeFinder_NoData,
+        RangeFinder_OutOfRangeLow,
+        RangeFinder_OutOfRangeHigh,
+        RangeFinder_Good
+    };
 
     // The RangeFinder_State structure is filled in by the backend driver
     struct RangeFinder_State {
@@ -61,7 +72,11 @@ public:
         uint16_t               distance_cm; // distance: in cm
         uint16_t               voltage_mv;  // voltage in millivolts,
                                             // if applicable, otherwise 0
-        bool                   healthy;     // sensor is communicating correctly
+        enum RangeFinder_Status status;     // sensor status
+        uint8_t                range_valid_count;   // number of consecutive valid readings (maxes out at 10)
+        bool                   pre_arm_check;   // true if sensor has passed pre-arm checks
+        uint16_t               pre_arm_distance_min;    // min distance captured during pre-arm checks
+        uint16_t               pre_arm_distance_max;    // max distance captured during pre-arm checks
     };
 
     // parameters for each instance
@@ -75,6 +90,7 @@ public:
     AP_Int8  _function[RANGEFINDER_MAX_INSTANCES];
     AP_Int16 _min_distance_cm[RANGEFINDER_MAX_INSTANCES];
     AP_Int16 _max_distance_cm[RANGEFINDER_MAX_INSTANCES];
+    AP_Int8  _ground_clearance_cm[RANGEFINDER_MAX_INSTANCES];
     AP_Int16 _powersave_range;
 
     static const struct AP_Param::GroupInfo var_info[];
@@ -120,12 +136,31 @@ public:
     int16_t min_distance_cm() const {
         return min_distance_cm(primary_instance);
     }
-    
-    bool healthy(uint8_t instance) const {
-        return instance < num_instances && _RangeFinder_STATE(instance).healthy;
+    int16_t ground_clearance_cm(uint8_t instance) const {
+        return _ground_clearance_cm[instance];
     }
-    bool healthy() const {
-        return healthy(primary_instance);
+    int16_t ground_clearance_cm() const {
+        return _ground_clearance_cm[primary_instance];
+    }
+
+    // query status
+    RangeFinder_Status status(uint8_t instance) const;
+    RangeFinder_Status status(void) const {
+        return status(primary_instance);
+    }
+
+    // true if sensor is returning data
+    bool has_data(uint8_t instance) const;
+    bool has_data() const {
+        return has_data(primary_instance);
+    }
+
+    // returns count of consecutive good readings
+    uint8_t range_valid_count() const {
+        return range_valid_count(primary_instance);
+    }
+    uint8_t range_valid_count(uint8_t instance) const {
+        return _RangeFinder_STATE(instance).range_valid_count;
     }
 
     /*
@@ -135,7 +170,14 @@ public:
     void set_estimated_terrain_height(float height) {
         estimated_terrain_height = height;
     }
-    
+
+    /*
+      returns true if pre-arm checks have passed for all range finders
+      these checks involve the user lifting or rotating the vehicle so that sensor readings between
+      the min and 2m can be captured
+     */
+    bool pre_arm_check() const;
+
 private:
     RangeFinder_State state[RANGEFINDER_MAX_INSTANCES];
     AP_RangeFinder_Backend *drivers[RANGEFINDER_MAX_INSTANCES];
@@ -145,5 +187,7 @@ private:
 
     void detect_instance(uint8_t instance);
     void update_instance(uint8_t instance);  
+
+    void update_pre_arm_check(uint8_t instance);
 };
 #endif // __RANGEFINDER_H__

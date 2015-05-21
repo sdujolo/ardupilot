@@ -6,12 +6,14 @@
 #ifndef DataFlash_h
 #define DataFlash_h
 
+#include <AP_HAL.h>
 #include <AP_Common.h>
 #include <AP_Param.h>
 #include <AP_GPS.h>
 #include <AP_InertialSensor.h>
 #include <AP_Baro.h>
 #include <AP_AHRS.h>
+#include <AP_Vehicle.h>
 #include "../AP_Airspeed/AP_Airspeed.h"
 #include "../AP_BattMonitor/AP_BattMonitor.h"
 #include <stdint.h>
@@ -28,6 +30,12 @@
 class DataFlash_Class
 {
 public:
+#if APM_BUILD_DELEGATES
+    typedef DELEGATE_FUNCTION2(void, AP_HAL::BetterStream*, uint8_t) print_mode_fn;
+#else
+    typedef void (*print_mode_fn)(AP_HAL::BetterStream *, uint8_t);
+#endif
+
     // initialisation
     virtual void Init(const struct LogStructure *structure, uint8_t num_types);
     virtual bool CardInserted(void) = 0;
@@ -48,7 +56,7 @@ public:
 #ifndef DATAFLASH_NO_CLI
     virtual void LogReadProcess(uint16_t log_num,
                                 uint16_t start_page, uint16_t end_page, 
-                                void (*printMode)(AP_HAL::BetterStream *port, uint8_t mode),
+                                print_mode_fn printMode,
                                 AP_HAL::BetterStream *port) = 0;
     virtual void DumpPageInfo(AP_HAL::BetterStream *port) = 0;
     virtual void ShowDeviceInfo(AP_HAL::BetterStream *port) = 0;
@@ -68,6 +76,7 @@ public:
     void Log_Write_Baro(AP_Baro &baro);
     void Log_Write_Power(void);
     void Log_Write_AHRS2(AP_AHRS &ahrs);
+    void Log_Write_POS(AP_AHRS &ahrs);
 #if AP_AHRS_NAVEKF_AVAILABLE
     void Log_Write_EKF(AP_AHRS_NavEKF &ahrs, bool optFlowEnabled);
 #endif
@@ -97,7 +106,7 @@ protected:
     read and print a log entry using the format strings from the given structure
     */
     void _print_log_entry(uint8_t msg_type, 
-                          void (*print_mode)(AP_HAL::BetterStream *port, uint8_t mode),
+                          print_mode_fn print_mode,
                           AP_HAL::BetterStream *port);
     
     void Log_Fill_Format(const struct LogStructure *structure, struct log_Format &pkt);
@@ -204,6 +213,7 @@ struct PACKED log_IMU {
     float accel_x, accel_y, accel_z;
     uint32_t gyro_error, accel_error;
     float temperature;
+    uint8_t gyro_health, accel_health;
 };
 
 struct PACKED log_RCIN {
@@ -260,6 +270,15 @@ struct PACKED log_AHRS {
     float alt;
     int32_t lat;
     int32_t lng;
+};
+
+struct PACKED log_POS {
+    LOG_PACKET_HEADER;
+    uint32_t time_ms;
+    int32_t lat;
+    int32_t lng;
+    float alt;
+    float rel_alt;
 };
 
 struct PACKED log_POWR {
@@ -483,6 +502,21 @@ struct PACKED log_Ubx3 {
     float sAcc;
 };
 
+struct PACKED log_GPS_RAW {
+    LOG_PACKET_HEADER;
+    uint32_t timestamp;
+    int32_t iTOW;
+    int16_t week;
+    uint8_t numSV;
+    uint8_t sv;
+    double cpMes;
+    double prMes;
+    float doMes;
+    int8_t mesQI;
+    int8_t cno;
+    uint8_t lli;
+};
+
 struct PACKED log_Esc {
     LOG_PACKET_HEADER;
     uint32_t time_ms;     
@@ -502,6 +536,20 @@ struct PACKED log_AIRSPEED {
     float   offset;
 };
 
+struct PACKED log_ACCEL {
+    LOG_PACKET_HEADER;
+    uint32_t timestamp;
+    uint32_t timestamp_us;
+    float AccX, AccY, AccZ;
+};
+
+struct PACKED log_GYRO {
+    LOG_PACKET_HEADER;
+    uint32_t timestamp;
+    uint32_t timestamp_us;
+    float GyrX, GyrY, GyrZ;
+};
+
 /*
 Format characters in the format string for binary log messages
   b   : int8_t
@@ -511,6 +559,7 @@ Format characters in the format string for binary log messages
   i   : int32_t
   I   : uint32_t
   f   : float
+  d   : double
   n   : char[4]
   N   : char[16]
   Z   : char[64]
@@ -531,7 +580,7 @@ Format characters in the format string for binary log messages
     { LOG_GPS_MSG, sizeof(log_GPS), \
       "GPS",  "BIHBcLLeeEefI", "Status,TimeMS,Week,NSats,HDop,Lat,Lng,RelAlt,Alt,Spd,GCrs,VZ,T" }, \
     { LOG_IMU_MSG, sizeof(log_IMU), \
-      "IMU",  "IffffffIIf",     "TimeMS,GyrX,GyrY,GyrZ,AccX,AccY,AccZ,ErrG,ErrA,Temp" }, \
+      "IMU",  "IffffffIIfBB",     "TimeMS,GyrX,GyrY,GyrZ,AccX,AccY,AccZ,ErrG,ErrA,Temp,GyHlt,AcHlt" }, \
     { LOG_MESSAGE_MSG, sizeof(log_Message), \
       "MSG",  "Z",     "Message"}, \
     { LOG_RCIN_MSG, sizeof(log_RCIN), \
@@ -566,11 +615,13 @@ Format characters in the format string for binary log messages
     { LOG_GPS2_MSG, sizeof(log_GPS2), \
       "GPS2",  "BIHBcLLeEefIBI", "Status,TimeMS,Week,NSats,HDop,Lat,Lng,Alt,Spd,GCrs,VZ,T,DSc,DAg" }, \
     { LOG_IMU2_MSG, sizeof(log_IMU), \
-      "IMU2",  "IffffffIIf",     "TimeMS,GyrX,GyrY,GyrZ,AccX,AccY,AccZ,ErrG,ErrA,Temp" }, \
+      "IMU2",  "IffffffIIfBB",     "TimeMS,GyrX,GyrY,GyrZ,AccX,AccY,AccZ,ErrG,ErrA,Temp,GyHlt,AcHlt" }, \
     { LOG_IMU3_MSG, sizeof(log_IMU), \
-      "IMU3",  "IffffffIIf",     "TimeMS,GyrX,GyrY,GyrZ,AccX,AccY,AccZ,ErrG,ErrA,Temp" }, \
+      "IMU3",  "IffffffIIfBB",     "TimeMS,GyrX,GyrY,GyrZ,AccX,AccY,AccZ,ErrG,ErrA,Temp,GyHlt,AcHlt" }, \
     { LOG_AHR2_MSG, sizeof(log_AHRS), \
       "AHR2","IccCfLL","TimeMS,Roll,Pitch,Yaw,Alt,Lat,Lng" }, \
+    { LOG_POS_MSG, sizeof(log_POS), \
+      "POS","ILLff","TimeMS,Lat,Lng,Alt,RelAlt" }, \
     { LOG_SIMSTATE_MSG, sizeof(log_AHRS), \
       "SIM","IccCfLL","TimeMS,Roll,Pitch,Yaw,Alt,Lat,Lng" }, \
     { LOG_EKF1_MSG, sizeof(log_EKF1), \
@@ -589,6 +640,8 @@ Format characters in the format string for binary log messages
       "UBX2", "IBbBbB", "TimeMS,Instance,ofsI,magI,ofsQ,magQ" }, \
     { LOG_UBX3_MSG, sizeof(log_Ubx3), \
       "UBX3", "IBfff", "TimeMS,Instance,hAcc,vAcc,sAcc" }, \
+    { LOG_GPS_RAW_MSG, sizeof(log_GPS_RAW), \
+      "GRAW", "IIHBBddfBbB", "TimeMS,WkMS,Week,numSV,sv,cpMes,prMes,doMes,mesQI,cno,lli" }, \
     { LOG_ESC1_MSG, sizeof(log_Esc), \
       "ESC1",  "Icccc", "TimeMS,RPM,Volt,Curr,Temp" }, \
     { LOG_ESC2_MSG, sizeof(log_Esc), \
@@ -610,7 +663,19 @@ Format characters in the format string for binary log messages
     { LOG_COMPASS2_MSG, sizeof(log_Compass), \
       "MAG2","IhhhhhhhhhB",    "TimeMS,MagX,MagY,MagZ,OfsX,OfsY,OfsZ,MOfsX,MOfsY,MOfsZ,Health" }, \
     { LOG_COMPASS3_MSG, sizeof(log_Compass), \
-      "MAG3","IhhhhhhhhhB",    "TimeMS,MagX,MagY,MagZ,OfsX,OfsY,OfsZ,MOfsX,MOfsY,MOfsZ,Health" } \
+      "MAG3","IhhhhhhhhhB",    "TimeMS,MagX,MagY,MagZ,OfsX,OfsY,OfsZ,MOfsX,MOfsY,MOfsZ,Health" }, \
+    { LOG_ACC1_MSG, sizeof(log_ACCEL), \
+      "ACC1", "IIfff",        "TimeMS,TimeUS,AccX,AccY,AccZ" }, \
+    { LOG_ACC2_MSG, sizeof(log_ACCEL), \
+      "ACC2", "IIfff",        "TimeMS,TimeUS,AccX,AccY,AccZ" }, \
+    { LOG_ACC3_MSG, sizeof(log_ACCEL), \
+      "ACC3", "IIfff",        "TimeMS,TimeUS,AccX,AccY,AccZ" }, \
+    { LOG_GYR1_MSG, sizeof(log_GYRO), \
+      "GYR1", "IIfff",        "TimeMS,TimeUS,GyrX,GyrY,GyrZ" }, \
+    { LOG_GYR2_MSG, sizeof(log_GYRO), \
+      "GYR2", "IIfff",        "TimeMS,TimeUS,GyrX,GyrY,GyrZ" }, \
+    { LOG_GYR3_MSG, sizeof(log_GYRO), \
+      "GYR3", "IIfff",        "TimeMS,TimeUS,GyrX,GyrY,GyrZ" }
 
 #if HAL_CPU_CLASS >= HAL_CPU_CLASS_75
 #define LOG_COMMON_STRUCTURES LOG_BASE_STRUCTURES, LOG_EXTRA_STRUCTURES
@@ -664,6 +729,14 @@ Format characters in the format string for binary log messages
 #define LOG_COMPASS2_MSG  168
 #define LOG_COMPASS3_MSG  169
 #define LOG_MODE_MSG      170
+#define LOG_GPS_RAW_MSG   171
+#define LOG_ACC1_MSG      172
+#define LOG_ACC2_MSG      173
+#define LOG_ACC3_MSG      174
+#define LOG_GYR1_MSG      175
+#define LOG_GYR2_MSG      176
+#define LOG_GYR3_MSG      177
+#define LOG_POS_MSG       178
 
 // message types 200 to 210 reversed for GPS driver use
 // message types 211 to 220 reversed for autotune use

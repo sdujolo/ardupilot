@@ -224,7 +224,7 @@ void AP_Camera::send_feedback(mavlink_channel_t chan, AP_GPS &gps, const AP_AHRS
         current_loc.lat, current_loc.lng,
         altitude/100.0f, altitude_rel/100.0f,
         ahrs.roll_sensor/100.0f, ahrs.pitch_sensor/100.0f, ahrs.yaw_sensor/100.0f,
-        0.0,0);
+        0.0f,CAMERA_FEEDBACK_PHOTO);
 }
 
 
@@ -235,7 +235,7 @@ void AP_Camera::send_feedback(mavlink_channel_t chan, AP_GPS &gps, const AP_AHRS
 */
 bool AP_Camera::update_location(const struct Location &loc)
 {
-    if (_trigg_dist == 0.0f) {
+    if (is_zero(_trigg_dist)) {
         return false;
     }
     if (_last_location.lat == 0 && _last_location.lng == 0) {

@@ -15,12 +15,13 @@
 #ifndef AP_Mission_h
 #define AP_Mission_h
 
+#include <AP_HAL.h>
+#include <AP_Vehicle.h>
 #include <GCS_MAVLink.h>
 #include <AP_Math.h>
 #include <AP_Common.h>
 #include <AP_Param.h>
 #include <AP_AHRS.h>
-#include <AP_HAL.h>
 #include <../StorageManager/StorageManager.h>
 
 // definitions
@@ -128,7 +129,7 @@ public:
     struct PACKED Digicam_Control {
         uint8_t session;        // 1 = on, 0 = off
         uint8_t zoom_pos;
-        uint8_t zoom_step;
+        int8_t zoom_step;       // +1 = zoom in, -1 = zoom out
         uint8_t focus_lock;
         uint8_t shooting_cmd;
         uint8_t cmd_id;
@@ -215,8 +216,13 @@ public:
     };
 
     // main program function pointers
+#if APM_BUILD_DELEGATES
+    typedef DELEGATE_FUNCTION1(bool, const Mission_Command&) mission_cmd_fn_t;
+    typedef DELEGATE_FUNCTION0(void) mission_complete_fn_t;
+#else
     typedef bool (*mission_cmd_fn_t)(const Mission_Command& cmd);
     typedef void (*mission_complete_fn_t)(void);
+#endif
 
     // mission state enumeration
     enum mission_state {

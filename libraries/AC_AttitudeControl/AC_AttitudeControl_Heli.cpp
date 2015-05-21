@@ -5,56 +5,8 @@
 
 // table of user settable parameters
 const AP_Param::GroupInfo AC_AttitudeControl_Heli::var_info[] PROGMEM = {
-
-    // 0, 1 were RATE_RP_MAX, RATE_Y_MAX
-
-    // @Param: SLEW_YAW
-    // @DisplayName: Yaw target slew rate
-    // @Description: Maximum rate the yaw target can be updated in Loiter, RTL, Auto flight modes
-    // @Units: Centi-Degrees/Sec
-    // @Range: 500 18000
-    // @Increment: 100
-    // @User: Advanced
-    AP_GROUPINFO("SLEW_YAW",    2, AC_AttitudeControl_Heli, _slew_yaw, AC_ATTITUDE_CONTROL_SLEW_YAW_DEFAULT),
-
-    // 3 was for ACCEL_RP_MAX
-
-    // @Param: ACCEL_Y_MAX
-    // @DisplayName: Acceleration Max for Yaw
-    // @Description: Maximum acceleration in yaw axis
-    // @Units: Centi-Degrees/Sec/Sec
-    // @Range: 0 72000
-    // @Values: 0:Disabled, 18000:Slow, 36000:Medium, 54000:Fast
-    // @Increment: 1000
-    // @User: Advanced
-    AP_GROUPINFO("ACCEL_Y_MAX",  4, AC_AttitudeControl_Heli, _accel_yaw_max, AC_ATTITUDE_CONTROL_ACCEL_Y_MAX_DEFAULT),
-
-    // @Param: RATE_FF_ENAB
-    // @DisplayName: Rate Feedforward Enable
-    // @Description: Controls whether body-frame rate feedfoward is enabled or disabled
-    // @Values: 0:Disabled, 1:Enabled
-    // @User: Advanced
-    AP_GROUPINFO("RATE_FF_ENAB", 5, AC_AttitudeControl_Heli, _rate_bf_ff_enabled, AC_ATTITUDE_CONTROL_RATE_BF_FF_DEFAULT),
-
-    // @Param: ACCEL_R_MAX
-    // @DisplayName: Acceleration Max for Roll
-    // @Description: Maximum acceleration in roll axis
-    // @Units: Centi-Degrees/Sec/Sec
-    // @Range: 0 180000
-    // @Increment: 1000
-    // @Values: 0:Disabled, 72000:Slow, 108000:Medium, 162000:Fast
-    // @User: Advanced
-    AP_GROUPINFO("ACCEL_R_MAX", 6, AC_AttitudeControl_Heli, _accel_roll_max, AC_ATTITUDE_CONTROL_ACCEL_RP_MAX_DEFAULT),
-
-    // @Param: ACCEL_P_MAX
-    // @DisplayName: Acceleration Max for Pitch
-    // @Description: Maximum acceleration in pitch axis
-    // @Units: Centi-Degrees/Sec/Sec
-    // @Range: 0 180000
-    // @Increment: 1000
-    // @Values: 0:Disabled, 72000:Slow, 108000:Medium, 162000:Fast
-    // @User: Advanced
-    AP_GROUPINFO("ACCEL_P_MAX", 7, AC_AttitudeControl_Heli, _accel_pitch_max, AC_ATTITUDE_CONTROL_ACCEL_RP_MAX_DEFAULT),
+    // parameters from parent vehicle
+    AP_NESTEDGROUPINFO(AC_AttitudeControl, 0),
 
     AP_GROUPEND
 };
@@ -210,13 +162,13 @@ void AC_AttitudeControl_Heli::rate_bf_to_motor_roll_pitch(float rate_roll_target
     pitch_out = pitch_pd + pitch_i + pitch_ff;
 
     // constrain output and update limit flags
-    if ((float)fabs(roll_out) > AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX) {
+    if (fabsf(roll_out) > AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX) {
         roll_out = constrain_float(roll_out,-AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX,AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX);
         _flags_heli.limit_roll = true;
     }else{
         _flags_heli.limit_roll = false;
     }
-    if ((float)fabs(pitch_out) > AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX) {
+    if (fabsf(pitch_out) > AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX) {
         pitch_out = constrain_float(pitch_out,-AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX,AC_ATTITUDE_RATE_RP_CONTROLLER_OUT_MAX);
         _flags_heli.limit_pitch = true;
     }else{
@@ -293,8 +245,8 @@ static LowPassFilterFloat rate_dynamics_filter;     // Rate Dynamics filter
         piro_pitch_i = pitch_i;
 
         Vector2f yawratevector;
-        yawratevector.x     = cos(-omega.z/100);
-        yawratevector.y     = sin(-omega.z/100);
+        yawratevector.x     = cosf(-omega.z/100.0f);
+        yawratevector.y     = sinf(-omega.z/100.0f);
         yawratevector.normalize();
 
         roll_i      = piro_roll_i * yawratevector.x - piro_pitch_i * yawratevector.y;
@@ -346,7 +298,7 @@ float AC_AttitudeControl_Heli::rate_bf_to_motor_yaw(float rate_target_cds)
     yaw_out = pd + i + ff;
 
     // constrain output and update limit flag
-    if ((float)fabs(yaw_out) > AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX) {
+    if (fabsf(yaw_out) > AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX) {
         yaw_out = constrain_float(yaw_out,-AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX,AC_ATTITUDE_RATE_YAW_CONTROLLER_OUT_MAX);
         _flags_heli.limit_yaw = true;
     }else{

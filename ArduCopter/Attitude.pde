@@ -64,9 +64,11 @@ static float get_roi_yaw()
 
 static float get_look_ahead_yaw()
 {
+    const Vector3f& vel = inertial_nav.get_velocity();
+    float speed = pythagorous2(vel.x,vel.y);
     // Commanded Yaw to automatically look ahead.
-    if (gps.status() >= AP_GPS::GPS_OK_FIX_2D && gps.ground_speed_cm() > YAW_LOOK_AHEAD_MIN_SPEED) {
-        yaw_look_ahead_bearing = gps.ground_course_cd();
+    if (position_ok() && (speed > YAW_LOOK_AHEAD_MIN_SPEED)) {
+        yaw_look_ahead_bearing = degrees(atan2f(vel.y,vel.x))*100.0f;
     }
     return yaw_look_ahead_bearing;
 }
@@ -80,7 +82,7 @@ static float get_look_ahead_yaw()
 static void update_thr_average()
 {
     // ensure throttle_average has been initialised
-    if( throttle_average == 0 ) {
+    if( is_zero(throttle_average) ) {
         throttle_average = g.throttle_mid;
         // update position controller
         pos_control.set_throttle_hover(throttle_average);
@@ -144,21 +146,20 @@ static int16_t get_pilot_desired_throttle(int16_t throttle_control)
 // get_pilot_desired_climb_rate - transform pilot's throttle input to
 // climb rate in cm/s.  we use radio_in instead of control_in to get the full range
 // without any deadzone at the bottom
-static int16_t get_pilot_desired_climb_rate(int16_t throttle_control)
+static float get_pilot_desired_climb_rate(float throttle_control)
 {
-    int16_t desired_rate = 0;
-
     // throttle failsafe check
     if( failsafe.radio ) {
-        return 0;
+        return 0.0f;
     }
 
-    int16_t mid_stick = g.rc_3.get_control_mid();
-    int16_t deadband_top = mid_stick + g.throttle_deadzone;
-    int16_t deadband_bottom = mid_stick - g.throttle_deadzone;
+    float desired_rate = 0.0f;
+    float mid_stick = g.rc_3.get_control_mid();
+    float deadband_top = mid_stick + g.throttle_deadzone;
+    float deadband_bottom = mid_stick - g.throttle_deadzone;
 
     // ensure a reasonable throttle value
-    throttle_control = constrain_int16(throttle_control,g.throttle_min,1000);
+    throttle_control = constrain_float(throttle_control,g.throttle_min,1000.0f);
 
     // ensure a reasonable deadzone
     g.throttle_deadzone = constrain_int16(g.throttle_deadzone, 0, 400);
@@ -166,13 +167,13 @@ static int16_t get_pilot_desired_climb_rate(int16_t throttle_control)
     // check throttle is above, below or in the deadband
     if (throttle_control < deadband_bottom) {
         // below the deadband
-        desired_rate = (int32_t)g.pilot_velocity_z_max * (throttle_control-deadband_bottom) / (deadband_bottom-g.throttle_min);
+        desired_rate = g.pilot_velocity_z_max * (throttle_control-deadband_bottom) / (deadband_bottom-g.throttle_min);
     }else if (throttle_control > deadband_top) {
         // above the deadband
-        desired_rate = (int32_t)g.pilot_velocity_z_max * (throttle_control-deadband_top) / (1000-deadband_top);
+        desired_rate = g.pilot_velocity_z_max * (throttle_control-deadband_top) / (1000.0f-deadband_top);
     }else{
         // must be in the deadband
-        desired_rate = 0;
+        desired_rate = 0.0f;
     }
 
     // desired climb rate for logging
@@ -182,47 +183,48 @@ static int16_t get_pilot_desired_climb_rate(int16_t throttle_control)
 }
 
 // get_non_takeoff_throttle - a throttle somewhere between min and mid throttle which should not lead to a takeoff
-static int16_t get_non_takeoff_throttle()
+static float get_non_takeoff_throttle()
 {
     return (g.throttle_mid / 2.0f);
+}
+
+static float get_takeoff_trigger_throttle()
+{
+    return g.rc_3.get_control_mid() + g.takeoff_trigger_dz;
 }
 
 // get_throttle_pre_takeoff - convert pilot's input throttle to a throttle output before take-off
 // used only for althold, loiter, hybrid flight modes
 // returns throttle output 0 to 1000
-static int16_t get_throttle_pre_takeoff(int16_t throttle_control)
+static float get_throttle_pre_takeoff(float input_thr)
 {
-    int16_t throttle_out;
-
-    // exit immediately if throttle_control is zero
-    if (throttle_control <= 0) {
-        return 0;
+    // exit immediately if input_thr is zero
+    if (input_thr <= 0.0f) {
+        return 0.0f;
     }
 
-    // calculate mid stick and deadband
-    int16_t mid_stick = g.rc_3.get_control_mid();
-    int16_t deadband_top = mid_stick + g.throttle_deadzone;
-
-    // sanity check throttle input
-    throttle_control = constrain_int16(throttle_control,0,1000);
-
-    // sanity check throttle_mid
+    // TODO: does this parameter sanity check really belong here?
     g.throttle_mid = constrain_int16(g.throttle_mid,300,700);
 
-    // sanity check throttle_min vs throttle_mid
-    if (g.throttle_min > get_non_takeoff_throttle()) {
-        return g.throttle_min;
+    float in_min = g.throttle_min;
+    float in_max = get_takeoff_trigger_throttle();
+
+    float out_min = motors.get_throttle_warn();
+    float out_max = get_non_takeoff_throttle();
+
+    if ((g.throttle_behavior & THR_BEHAVE_FEEDBACK_FROM_MID_STICK) != 0) {
+        in_min = g.rc_3.get_control_mid();
     }
 
-    // check throttle is below top of deadband
-    if (throttle_control < deadband_top) {
-        throttle_out = g.throttle_min + ((float)(throttle_control-g.throttle_min))*((float)(get_non_takeoff_throttle() - g.throttle_min))/((float)(deadband_top-g.throttle_min));
-    }else{
-        // must be in the deadband
-        throttle_out = get_non_takeoff_throttle();
+    float input_range = in_max-in_min;
+    float output_range = out_max-out_min;
+
+    // sanity check ranges
+    if (input_range <= 0.0f || output_range <= 0.0f) {
+        return 0.0f;
     }
 
-    return throttle_out;
+    return constrain_float(out_min + (input_thr-in_min)*output_range/input_range, out_min, out_max);
 }
 
 // get_surface_tracking_climb_rate - hold copter at the desired distance above the ground
@@ -265,4 +267,28 @@ static void set_accel_throttle_I_from_pilot_throttle(int16_t pilot_throttle)
 {
     // shift difference between pilot's throttle and hover throttle into accelerometer I
     g.pid_accel_z.set_integrator(pilot_throttle-throttle_average);
+}
+
+// updates position controller's maximum altitude using fence and EKF limits
+static void update_poscon_alt_max()
+{
+    float alt_limit_cm = 0.0f;  // interpreted as no limit if left as zero
+
+#if AC_FENCE == ENABLED
+    // set fence altitude limit in position controller
+    if ((fence.get_enabled_fences() & AC_FENCE_TYPE_ALT_MAX) != 0) {
+        alt_limit_cm = pv_alt_above_origin(fence.get_safe_alt()*100.0f);
+    }
+#endif
+
+    // get alt limit from EKF (limited during optical flow flight)
+    float ekf_limit_cm = 0.0f;
+    if (inertial_nav.get_hgt_ctrl_limit(ekf_limit_cm)) {
+        if ((alt_limit_cm <= 0.0f) || (ekf_limit_cm < alt_limit_cm)) {
+            alt_limit_cm = ekf_limit_cm;
+        }
+    }
+
+    // pass limit to pos controller
+    pos_control.set_alt_max(alt_limit_cm);
 }

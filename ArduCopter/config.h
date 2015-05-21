@@ -156,7 +156,7 @@
 #endif
 
 #ifndef SONAR_GAIN_DEFAULT
- # define SONAR_GAIN_DEFAULT 0.8            // gain for controlling how quickly sonar range adjusts target altitude (lower means slower reaction)
+ # define SONAR_GAIN_DEFAULT 0.8f           // gain for controlling how quickly sonar range adjusts target altitude (lower means slower reaction)
 #endif
 
 #ifndef THR_SURFACE_TRACKING_VELZ_MAX
@@ -287,7 +287,7 @@
 
 // arming check's maximum acceptable vector difference between internal and external compass after vectors are normalized to field length of 1.0
 #ifndef COMPASS_ACCEPTABLE_VECTOR_DIFF
-  #define COMPASS_ACCEPTABLE_VECTOR_DIFF    0.75    // pre arm compass check will fail if internal vs external compass direction differ by more than 45 degrees
+  #define COMPASS_ACCEPTABLE_VECTOR_DIFF    0.75f    // pre arm compass check will fail if internal vs external compass direction differ by more than 45 degrees
  #endif
 
 //////////////////////////////////////////////////////////////////////////////
@@ -367,6 +367,17 @@
  # define FS_THR_VALUE_DEFAULT             975
 #endif
 
+//////////////////////////////////////////////////////////////////////////////
+// Takeoff
+//
+#ifndef PILOT_TKOFF_ALT_DEFAULT
+ # define PILOT_TKOFF_ALT_DEFAULT           0     // default final alt above home for pilot initiated takeoff
+#endif
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Landing
+//
 #ifndef LAND_SPEED
  # define LAND_SPEED    50          // the descent speed for the final stage of landing in cm/s
 #endif
@@ -467,6 +478,10 @@
  # define RTL_ALT 				    1500    // default alt to return to home in cm, 0 = Maintain current altitude
 #endif
 
+#ifndef RTL_ALT_MIN
+ # define RTL_ALT_MIN               200     // min height above ground for RTL (i.e 2m)
+#endif
+
 #ifndef RTL_LOITER_TIME
  # define RTL_LOITER_TIME           5000    // Time (in milliseconds) to loiter above home before begining final descent
 #endif
@@ -560,6 +575,13 @@
 //
 #ifndef POS_XY_P
  # define POS_XY_P             	1.0f
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
+// Stop mode defaults
+//
+#ifndef BRAKE_MODE_DECEL_RATE
+ # define BRAKE_MODE_DECEL_RATE  750 // acceleration rate in cm/s/s in Brake Mode
 #endif
 
 //////////////////////////////////////////////////////////////////////////////

@@ -40,14 +40,14 @@ static bool drift_init(bool ignore_checks)
 // should be called at 100hz or more
 static void drift_run()
 {
-    static float breaker = 0.0;
-    static float roll_input = 0.0;
+    static float breaker = 0.0f;
+    static float roll_input = 0.0f;
     float target_roll, target_pitch;
     float target_yaw_rate;
     int16_t pilot_throttle_scaled;
 
-    // if not armed or landed and throttle at zero, set throttle to zero and exit immediately
-    if(!motors.armed() || (ap.land_complete && ap.throttle_zero)) {
+    // if not armed or motor interlock not enabled or landed and throttle at zero, set throttle to zero and exit immediately
+    if(!motors.armed() || !motors.get_interlock() || (ap.land_complete && ap.throttle_zero)) {
         attitude_control.set_throttle_out_unstabilized(0,true,g.throttle_filt);
         return;
     }
@@ -66,13 +66,13 @@ static void drift_run()
     float pitch_vel = vel.y * ahrs.sin_yaw() + vel.x * ahrs.cos_yaw(); // body pitch vel
 
     // gain sceduling for Yaw
-    float pitch_vel2 = min(fabs(pitch_vel), 2000);
+    float pitch_vel2 = min(fabsf(pitch_vel), 2000);
     target_yaw_rate = ((float)target_roll/1.0f) * (1.0f - (pitch_vel2 / 5000.0f)) * g.acro_yaw_p;
 
     roll_vel = constrain_float(roll_vel, -DRIFT_SPEEDLIMIT, DRIFT_SPEEDLIMIT);
     pitch_vel = constrain_float(pitch_vel, -DRIFT_SPEEDLIMIT, DRIFT_SPEEDLIMIT);
     
-    roll_input = roll_input * .96 + (float)g.rc_4.control_in * .04;
+    roll_input = roll_input * .96f + (float)g.rc_4.control_in * .04f;
 
     //convert user input into desired roll velocity
     float roll_vel_error = roll_vel - (roll_input / DRIFT_SPEEDGAIN);
@@ -82,13 +82,13 @@ static void drift_run()
     target_roll = constrain_int16(target_roll, -4500, 4500);
 
     // If we let go of sticks, bring us to a stop
-    if(target_pitch == 0){
+    if(is_zero(target_pitch)){
         // .14/ (.03 * 100) = 4.6 seconds till full breaking
-        breaker += .03;
+        breaker += .03f;
         breaker = min(breaker, DRIFT_SPEEDGAIN);
         target_pitch = pitch_vel * breaker;
     }else{
-        breaker = 0.0;
+        breaker = 0.0f;
     }
 
     // call attitude controller
@@ -108,7 +108,7 @@ int16_t get_throttle_assist(float velz, int16_t pilot_throttle_scaled)
     if (pilot_throttle_scaled > g.throttle_min && pilot_throttle_scaled < THR_MAX &&
         pilot_throttle_scaled > DRIFT_THR_MIN && pilot_throttle_scaled < DRIFT_THR_MAX) {
         // calculate throttle assist gain
-        thr_assist = 1.2 - ((float)abs(pilot_throttle_scaled - 500) / 240.0f);
+        thr_assist = 1.2f - ((float)abs(pilot_throttle_scaled - 500) / 240.0f);
         thr_assist = constrain_float(thr_assist, 0.0f, 1.0f) * -DRIFT_THR_ASSIST_GAIN * velz;
 
         // ensure throttle assist never adjusts the throttle by more than 300 pwm

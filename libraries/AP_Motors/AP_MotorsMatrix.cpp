@@ -216,8 +216,8 @@ void AP_MotorsMatrix::output_armed_stabilizing()
     // set rpy_low and rpy_high to the lowest and highest values of the motors
     for (i=0; i<AP_MOTORS_MAX_NUM_MOTORS; i++) {
         if (motor_enabled[i]) {
-            rpy_out[i] = _rc_roll.pwm_out * _roll_factor[i] * get_voltage_comp_gain() +
-                            _rc_pitch.pwm_out * _pitch_factor[i] * get_voltage_comp_gain();
+            rpy_out[i] = _rc_roll.pwm_out * _roll_factor[i] * get_compensation_gain() +
+                            _rc_pitch.pwm_out * _pitch_factor[i] * get_compensation_gain();
 
             // record lowest roll pitch command
             if (rpy_out[i] < rpy_low) {
@@ -240,7 +240,7 @@ void AP_MotorsMatrix::output_armed_stabilizing()
     //      We will choose #1 (the best throttle for yaw control) if that means reducing throttle to the motors (i.e. we favour reducing throttle *because* it provides better yaw control)
     //      We will choose #2 (a mix of pilot and hover throttle) only when the throttle is quite low.  We favour reducing throttle instead of better yaw control because the pilot has commanded it
     int16_t motor_mid = (rpy_low+rpy_high)/2;
-    out_best_thr_pwm = min(out_mid_pwm - motor_mid, max(_rc_throttle.radio_out, _rc_throttle.radio_out*max(0,1.0f-_throttle_low_comp)+get_hover_throttle_as_pwm()*_throttle_low_comp));
+    out_best_thr_pwm = min(out_mid_pwm - motor_mid, max(_rc_throttle.radio_out, _rc_throttle.radio_out*max(0,1.0f-_throttle_thr_mix)+get_hover_throttle_as_pwm()*_throttle_thr_mix));
 
     // calculate amount of yaw we can fit into the throttle range
     // this is always equal to or less than the requested yaw from the pilot or rate controller
@@ -249,16 +249,16 @@ void AP_MotorsMatrix::output_armed_stabilizing()
 
     if (_rc_yaw.pwm_out >= 0) {
         // if yawing right
-        if (yaw_allowed > _rc_yaw.pwm_out * get_voltage_comp_gain()) {
-            yaw_allowed = _rc_yaw.pwm_out * get_voltage_comp_gain(); // to-do: this is bad form for yaw_allows to change meaning to become the amount that we are going to output
+        if (yaw_allowed > _rc_yaw.pwm_out * get_compensation_gain()) {
+            yaw_allowed = _rc_yaw.pwm_out * get_compensation_gain(); // to-do: this is bad form for yaw_allows to change meaning to become the amount that we are going to output
         }else{
             limit.yaw = true;
         }
     }else{
         // if yawing left
         yaw_allowed = -yaw_allowed;
-        if (yaw_allowed < _rc_yaw.pwm_out * get_voltage_comp_gain()) {
-            yaw_allowed = _rc_yaw.pwm_out * get_voltage_comp_gain(); // to-do: this is bad form for yaw_allows to change meaning to become the amount that we are going to output
+        if (yaw_allowed < _rc_yaw.pwm_out * get_compensation_gain()) {
+            yaw_allowed = _rc_yaw.pwm_out * get_compensation_gain(); // to-do: this is bad form for yaw_allows to change meaning to become the amount that we are going to output
         }else{
             limit.yaw = true;
         }

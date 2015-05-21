@@ -1,6 +1,6 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
-#define THISFIRMWARE "ArduPlane V3.3.0beta1"
+#define THISFIRMWARE "ArduPlane V3.3.0"
 /*
    Lead developer: Andrew Tridgell
  
@@ -103,7 +103,7 @@ static AP_Vehicle::FixedWing aparm;
 #include "Parameters.h"
 
 #include <AP_HAL_AVR.h>
-#include <AP_HAL_AVR_SITL.h>
+#include <AP_HAL_SITL.h>
 #include <AP_HAL_PX4.h>
 #include <AP_HAL_FLYMAPLE.h>
 #include <AP_HAL_Linux.h>
@@ -152,6 +152,8 @@ static void update_events(void);
 void gcs_send_text_fmt(const prog_char_t *fmt, ...);
 static void print_flight_mode(AP_HAL::BetterStream *port, uint8_t mode);
 static bool arm_motors(AP_Arming::ArmingMethod method);
+static bool create_mixer_file(const char *filename);
+static bool setup_failsafe_mixing(void);
 
 ////////////////////////////////////////////////////////////////////////////////
 // DataFlash
@@ -203,9 +205,11 @@ AP_ADC_ADS7844 apm1_adc;
 
 AP_InertialSensor ins;
 
+static RangeFinder rangefinder;
+
 // Inertial Navigation EKF
 #if AP_AHRS_NAVEKF_AVAILABLE
-AP_AHRS_NavEKF ahrs(ins, barometer, gps);
+AP_AHRS_NavEKF ahrs(ins, barometer, gps, rangefinder);
 #else
 AP_AHRS_DCM ahrs(ins, barometer, gps);
 #endif
@@ -219,7 +223,7 @@ static AP_PitchController pitchController(ahrs, aparm, DataFlash);
 static AP_YawController   yawController(ahrs, aparm);
 static AP_SteerController steerController(ahrs);
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 SITL sitl;
 #endif
 
@@ -264,11 +268,6 @@ static AP_SpdHgtControl *SpdHgt_Controller = &TECS_controller;
 
 // a pin for reading the receiver RSSI voltage. 
 static AP_HAL::AnalogSource *rssi_analog_source;
-
-////////////////////////////////////////////////////////////////////////////////
-// rangefinder
-////////////////////////////////////////////////////////////////////////////////
-static RangeFinder rangefinder;
 
 static struct {
     bool in_range;
@@ -395,7 +394,7 @@ static struct {
 // This is used to scale GPS values for EEPROM storage
 // 10^7 times Decimal GPS means 1 == 1cm
 // This approximation makes calculations integer and it's easy to read
-static const float t7                        = 10000000.0;
+static const float t7                        = 10000000.0f;
 // We use atan2 and other trig techniques to calaculate angles
 // A counter used to count down valid gps fixes to allow the gps estimate to settle
 // before recording our home position (and executing a ground start if we booted with an air start)
@@ -660,6 +659,8 @@ static struct {
 // A value used in condition commands (eg delay, change alt, etc.)
 // For example in a change altitude command, it is the altitude to change to.
 static int32_t condition_value;
+// Sometimes there is a second condition required:
+static int32_t condition_value2;
 // A starting value used to check the status of a conditional command.
 // For example in a delay command the condition_start records that start time for the delay
 static uint32_t condition_start;
@@ -800,7 +801,7 @@ static const AP_Scheduler::Task scheduler_tasks[] PROGMEM = {
     { update_logging1,        5,   1700 },
     { update_logging2,        5,   1700 },
 #if FRSKY_TELEM_ENABLED == ENABLED
-    { telemetry_send,        10,    100 },	
+    { frsky_telemetry_send,  10,    100 },
 #endif
     { terrain_update,         5,    500 },
 };
@@ -823,7 +824,7 @@ void setup() {
     init_ardupilot();
 
     // initialise the main loop scheduler
-    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]));
+    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]), NULL);
 }
 
 void loop()
@@ -1038,6 +1039,12 @@ static void one_second_loop()
         terrain.log_terrain_data(DataFlash);
     }
 #endif
+    // piggyback the status log entry on the MODE log entry flag
+    if (should_log(MASK_LOG_MODE)) {
+        Log_Write_Status();
+    }
+
+    ins.set_raw_logging(should_log(MASK_LOG_IMU_RAW));
 }
 
 static void log_perf_info()
@@ -1210,12 +1217,6 @@ static void handle_auto_mode(void)
             // during final approach constrain roll to the range
             // allowed for level flight
             nav_roll_cd = constrain_int32(nav_roll_cd, -g.level_roll_limit*100UL, g.level_roll_limit*100UL);
-        } else {
-            if (!ahrs.airspeed_sensor_enabled()) {
-                // when not under airspeed control, don't allow
-                // down pitch in landing
-                nav_pitch_cd = constrain_int32(nav_pitch_cd, 0, nav_pitch_cd);
-            }
         }
         calc_throttle();
         
@@ -1424,11 +1425,20 @@ static void update_navigation()
         break;
             
     case RTL:
-        if (g.rtl_autoland && 
+        if (g.rtl_autoland == 1 &&
             !auto_state.checked_for_autoland &&
             nav_controller->reached_loiter_target() && 
             labs(altitude_error_cm) < 1000) {
             // we've reached the RTL point, see if we have a landing sequence
+            jump_to_landing_sequence();
+
+            // prevent running the expensive jump_to_landing_sequence
+            // on every loop
+            auto_state.checked_for_autoland = true;
+        }
+        else if (g.rtl_autoland == 2 &&
+            !auto_state.checked_for_autoland) {
+            // Go directly to the landing sequence
             jump_to_landing_sequence();
 
             // prevent running the expensive jump_to_landing_sequence
@@ -1481,6 +1491,12 @@ static void set_flight_stage(AP_SpdHgtControl::FlightStage fs)
                 gcs_send_text_P(SEVERITY_HIGH, PSTR("Disable fence failed (autodisable)"));
             } else {
                 gcs_send_text_P(SEVERITY_HIGH, PSTR("Fence disabled (autodisable)"));
+            }
+        } else if (g.fence_autoenable == 2) {
+            if (! geofence_set_floor_enabled(false)) {
+                gcs_send_text_P(SEVERITY_HIGH, PSTR("Disable fence floor failed (autodisable)"));
+            } else {
+                gcs_send_text_P(SEVERITY_HIGH, PSTR("Fence floor disabled (auto disable)"));
             }
         }
 #endif
@@ -1622,9 +1638,7 @@ static void update_optical_flow(void)
         uint8_t flowQuality = optflow.quality();
         Vector2f flowRate = optflow.flowRate();
         Vector2f bodyRate = optflow.bodyRate();
-        // Use range from a separate range finder if available, not the PX4Flows built in sensor which is ineffective
-        float ground_distance_m = 0.01f*rangefinder.distance_cm();
-        ahrs.writeOptFlowMeas(flowQuality, flowRate, bodyRate, last_of_update, rangefinder_state.in_range_count, ground_distance_m);
+        ahrs.writeOptFlowMeas(flowQuality, flowRate, bodyRate, last_of_update);
         Log_Write_Optflow();
     }
 }

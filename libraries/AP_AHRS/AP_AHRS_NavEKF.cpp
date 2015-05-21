@@ -78,7 +78,7 @@ void AP_AHRS_NavEKF::update(void)
     _dcm_attitude(roll, pitch, yaw);
 
     if (!ekf_started) {
-        // wait 10 seconds
+        // wait 1 second for DCM to output a valid tilt error estimate
         if (start_time_ms == 0) {
             start_time_ms = hal.scheduler->millis();
         }
@@ -107,7 +107,7 @@ void AP_AHRS_NavEKF::update(void)
             _gyro_estimate.zero();
             uint8_t healthy_count = 0;    
             for (uint8_t i=0; i<_ins.get_gyro_count(); i++) {
-                if (_ins.get_gyro_health(i)) {
+                if (_ins.get_gyro_health(i) && healthy_count < 2) {
                     _gyro_estimate += _ins.get_gyro(i);
                     healthy_count++;
                 }
@@ -193,12 +193,12 @@ bool AP_AHRS_NavEKF::get_position(struct Location &loc) const
 }
 
 // status reporting of estimated errors
-float AP_AHRS_NavEKF::get_error_rp(void)
+float AP_AHRS_NavEKF::get_error_rp(void) const
 {
     return AP_AHRS_DCM::get_error_rp();
 }
 
-float AP_AHRS_NavEKF::get_error_yaw(void)
+float AP_AHRS_NavEKF::get_error_yaw(void) const
 {
     return AP_AHRS_DCM::get_error_yaw();
 }
@@ -312,24 +312,38 @@ bool AP_AHRS_NavEKF::get_relative_position_NED(Vector3f &vec) const
 
 bool AP_AHRS_NavEKF::using_EKF(void) const
 {
-    bool ret = ekf_started && _ekf_use && EKF.healthy();
+    uint8_t ekf_faults;
+    EKF.getFilterFaults(ekf_faults);
+    // If EKF is started we switch away if it reports unhealthy. This could be due to bad
+    // sensor data. If EKF reversion is inhibited, we only switch across if the EKF encounters
+    // an internal processing error, but not for bad sensor data.
+    bool ret = ekf_started && ((_ekf_use == EKF_USE_WITH_FALLBACK && EKF.healthy()) || (_ekf_use == EKF_USE_WITHOUT_FALLBACK && ekf_faults == 0));
     if (!ret) {
         return false;
     }
-#if APM_BUILD_TYPE(APM_BUILD_ArduPlane) || APM_BUILD_TYPE(APM_BUILD_APMrover2)
-    nav_filter_status filt_state;
-    EKF.getFilterStatus(filt_state);
-    if (hal.util->get_soft_armed() && filt_state.flags.const_pos_mode) {
-        return false;
+
+    if (_vehicle_class == AHRS_VEHICLE_FIXED_WING ||
+        _vehicle_class == AHRS_VEHICLE_GROUND) {
+        nav_filter_status filt_state;
+        EKF.getFilterStatus(filt_state);
+        if (hal.util->get_soft_armed() && !filt_state.flags.using_gps && _gps.status() >= AP_GPS::GPS_OK_FIX_3D) {
+            // if the EKF is not fusing GPS and we have a 3D lock, then
+            // plane and rover would prefer to use the GPS position from
+            // DCM. This is a safety net while some issues with the EKF
+            // get sorted out
+            return false;
+        }
+        if (hal.util->get_soft_armed() && filt_state.flags.const_pos_mode) {
+            return false;
+        }
+        if (!filt_state.flags.attitude ||
+            !filt_state.flags.horiz_vel ||
+            !filt_state.flags.vert_vel ||
+            !filt_state.flags.horiz_pos_abs ||
+            !filt_state.flags.vert_pos) {
+            return false;
+        }
     }
-    if (!filt_state.flags.attitude ||
-        !filt_state.flags.horiz_vel ||
-        !filt_state.flags.vert_vel ||
-        !filt_state.flags.horiz_pos_abs ||
-        !filt_state.flags.vert_pos) {
-        return false;
-    }
-#endif
     return ret;
 }
 
@@ -338,8 +352,22 @@ bool AP_AHRS_NavEKF::using_EKF(void) const
 */
 bool AP_AHRS_NavEKF::healthy(void) const
 {
-    if (_ekf_use) {
-        return ekf_started && EKF.healthy();
+    // If EKF is started we switch away if it reports unhealthy. This could be due to bad
+    // sensor data. If EKF reversion is inhibited, we only switch across if the EKF encounters
+    // an internal processing error, but not for bad sensor data.
+    if (_ekf_use != EKF_DO_NOT_USE) {
+        bool ret = ekf_started && EKF.healthy();
+        if (!ret) {
+            return false;
+        }
+        if ((_vehicle_class == AHRS_VEHICLE_FIXED_WING ||
+             _vehicle_class == AHRS_VEHICLE_GROUND) &&
+            !using_EKF()) {
+            // on fixed wing we want to be using EKF to be considered
+            // healthy if EKF is enabled
+            return false;
+        }
+        return true;
     }
     return AP_AHRS_DCM::healthy();    
 }
@@ -359,9 +387,9 @@ bool AP_AHRS_NavEKF::initialised(void) const
 };
 
 // write optical flow data to EKF
-void  AP_AHRS_NavEKF::writeOptFlowMeas(uint8_t &rawFlowQuality, Vector2f &rawFlowRates, Vector2f &rawGyroRates, uint32_t &msecFlowMeas, uint8_t &rangeHealth, float &rawSonarRange)
+void  AP_AHRS_NavEKF::writeOptFlowMeas(uint8_t &rawFlowQuality, Vector2f &rawFlowRates, Vector2f &rawGyroRates, uint32_t &msecFlowMeas)
 {
-    EKF.writeOptFlowMeas(rawFlowQuality, rawFlowRates, rawGyroRates, msecFlowMeas, rangeHealth, rawSonarRange);
+    EKF.writeOptFlowMeas(rawFlowQuality, rawFlowRates, rawGyroRates, msecFlowMeas);
 }
 
 // inhibit GPS useage

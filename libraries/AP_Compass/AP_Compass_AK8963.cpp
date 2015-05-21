@@ -284,7 +284,7 @@ bool AP_Compass_AK8963_MPU9250::read_raw()
         _mag_y = (float) int16_val(rx, 2);
         _mag_z = (float) int16_val(rx, 3);
 
-        if (_mag_x == 0 && _mag_y == 0 && _mag_z == 0) {
+        if (is_zero(_mag_x) && is_zero(_mag_y) && is_zero(_mag_z)) {
             return false;
         }
 
@@ -299,7 +299,7 @@ AP_Compass_AK8963::AP_Compass_AK8963(Compass &compass) :
     AP_Compass_Backend(compass),    
     _backend(NULL),
     _initialised(false),
-    _state(CONVERSION),
+    _state(STATE_CONVERSION),
     _last_update_timestamp(0),
     _last_accum_time(0)
 {
@@ -458,15 +458,15 @@ void AP_Compass_AK8963::_update()
 
     switch (_state)
        {
-        case CONVERSION:
+        case STATE_CONVERSION:
             _start_conversion();
-            _state = SAMPLE;
+            _state = STATE_SAMPLE;
             break;
-        case    SAMPLE:
+        case STATE_SAMPLE:
             _collect_samples();
-            _state = CONVERSION;
+            _state = STATE_CONVERSION;
             break;
-        case ERROR:
+        case STATE_ERROR:
             break;
         default:
             break;

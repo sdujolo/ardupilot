@@ -12,18 +12,17 @@ set -x
 
 echo "Testing ArduPlane build"
 pushd ArduPlane
-make configure
 for b in all apm2 sitl linux; do
     pwd
     make clean
     make $b -j4
 done
-make clean
-make apm1-nologging
 popd
 
 for d in ArduCopter APMrover2 ArduPlane AntennaTracker; do
     pushd $d
+    make clean
+    make navio -j3
     make clean
     make sitl -j4
     make clean

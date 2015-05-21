@@ -33,9 +33,10 @@
 #include <AP_Rally.h>
 #include <AP_BattMonitor.h>
 #include <AP_Scheduler.h>
+#include <AP_RangeFinder.h>
 
 #include <AP_HAL_AVR.h>
-#include <AP_HAL_AVR_SITL.h>
+#include <AP_HAL_SITL.h>
 #include <AP_HAL_Empty.h>
 #include <AP_HAL_PX4.h>
 
@@ -69,7 +70,7 @@ void setup(void)
 			 AP_InertialSensor::RATE_50HZ);
 
     // initialise the scheduler
-    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]));
+    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]), NULL);
 }
 
 void loop(void)

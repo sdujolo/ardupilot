@@ -93,6 +93,13 @@ const AP_Param::GroupInfo AP_Motors::var_info[] PROGMEM = {
     // @User: Advanced
     AP_GROUPINFO("CURR_MAX", 12, AP_Motors, _batt_current_max, AP_MOTORS_CURR_MAX_DEFAULT),
 
+    // @Param: THR_MIX_MIN
+    // @DisplayName: Throttle Mix Minimum
+    // @Description: Minimum ratio that the average throttle can increase above the desired throttle after roll, pitch and yaw are mixed
+    // @Range: 0.1 0.25
+    // @User: Advanced
+    AP_GROUPINFO("THR_MIX_MIN", 13, AP_Motors, _thr_mix_min, AP_MOTORS_THR_MIX_MIN_DEFAULT),
+
     AP_GROUPEND
 };
 
@@ -108,14 +115,15 @@ AP_Motors::AP_Motors(RC_Channel& rc_roll, RC_Channel& rc_pitch, RC_Channel& rc_t
     _max_throttle(AP_MOTORS_DEFAULT_MAX_THROTTLE),
     _hover_out(AP_MOTORS_DEFAULT_MID_THROTTLE),
     _spin_when_armed_ramped(0),
-    _throttle_low_comp(AP_MOTORS_THR_LOW_CMP_DEFAULT),
-    _throttle_low_comp_desired(AP_MOTORS_THR_LOW_CMP_DEFAULT),
+    _throttle_thr_mix(AP_MOTORS_THR_LOW_CMP_DEFAULT),
+    _throttle_thr_mix_desired(AP_MOTORS_THR_LOW_CMP_DEFAULT),
     _batt_voltage(0.0f),
     _batt_voltage_resting(0.0f),
     _batt_current(0.0f),
     _batt_current_resting(0.0f),
     _batt_resistance(0.0f),
     _batt_timer(0),
+    _air_density_ratio(1.0f),
     _lift_max(1.0f),
     _throttle_limit(1.0f),
     _throttle_in(0.0f),
@@ -186,10 +194,12 @@ void AP_Motors::output()
     update_lift_max_from_batt_voltage();
 
     // move throttle_low_comp towards desired throttle low comp
-    update_throttle_low_comp();
+    update_throttle_thr_mix();
 
     if (_flags.armed) {
-        if (_flags.stabilizing) {
+        if (!_flags.interlock) {
+            output_armed_zero_throttle();
+        } else if (_flags.stabilizing) {
             output_armed_stabilizing();
         } else {
             output_armed_not_stabilizing();
@@ -289,12 +299,19 @@ void AP_Motors::current_limit_max_throttle()
 // apply_thrust_curve_and_volt_scaling - returns throttle curve adjusted pwm value (i.e. 1000 ~ 2000)
 int16_t AP_Motors::apply_thrust_curve_and_volt_scaling(int16_t pwm_out, int16_t pwm_min, int16_t pwm_max) const
 {
-    float temp_out = ((float)(pwm_out-pwm_min))/((float)(pwm_max-pwm_min));
+    // convert to 0.0 to 1.0 ratio
+    float throttle_ratio = ((float)(pwm_out-pwm_min))/((float)(pwm_max-pwm_min));
+
+    // apply thrust curve - domain 0.0 to 1.0, range 0.0 to 1.0
     if (_thrust_curve_expo > 0.0f){
-        temp_out = ((_thrust_curve_expo-1.0f) + safe_sqrt((1.0f-_thrust_curve_expo)*(1.0f-_thrust_curve_expo) + 4.0f*_thrust_curve_expo*_lift_max*temp_out))/(2.0f*_thrust_curve_expo*_batt_voltage_filt.get());
+        throttle_ratio = ((_thrust_curve_expo-1.0f) + safe_sqrt((1.0f-_thrust_curve_expo)*(1.0f-_thrust_curve_expo) + 4.0f*_thrust_curve_expo*_lift_max*throttle_ratio))/(2.0f*_thrust_curve_expo*_batt_voltage_filt.get());
     }
-    temp_out = constrain_float(temp_out*_thrust_curve_max*(pwm_max-pwm_min)+pwm_min, pwm_min, pwm_max);
-    return (int16_t)temp_out;
+
+    // scale to maximum thrust point
+    throttle_ratio *= _thrust_curve_max;
+
+    // convert back to pwm range, constrain and return
+    return (int16_t)constrain_float(throttle_ratio*(pwm_max-pwm_min)+pwm_min, pwm_min, (pwm_max-pwm_min)*_thrust_curve_max+pwm_min);
 }
 
 // update_lift_max from battery voltage - used for voltage compensation
@@ -302,7 +319,7 @@ void AP_Motors::update_lift_max_from_batt_voltage()
 {
     // sanity check battery_voltage_min is not too small
     // if disabled or misconfigured exit immediately
-    if((_batt_voltage_max <= 0) || (_batt_voltage_min >= _batt_voltage_max) || (_batt_voltage < 0.25*_batt_voltage_min)) {
+    if((_batt_voltage_max <= 0) || (_batt_voltage_min >= _batt_voltage_max) || (_batt_voltage < 0.25f*_batt_voltage_min)) {
         _batt_voltage_filt.reset(1.0f);
         _lift_max = 1.0f;
         return;
@@ -344,18 +361,34 @@ void AP_Motors::update_battery_resistance()
     }
 }
 
-// update_throttle_low_comp - slew set_throttle_low_comp to requested value
-void AP_Motors::update_throttle_low_comp()
+// update_throttle_thr_mix - slew set_throttle_thr_mix to requested value
+void AP_Motors::update_throttle_thr_mix()
 {
-    // slew _throttle_low_comp to _throttle_low_comp_desired
-    if (_throttle_low_comp < _throttle_low_comp_desired) {
+    // slew _throttle_thr_mix to _throttle_thr_mix_desired
+    if (_throttle_thr_mix < _throttle_thr_mix_desired) {
         // increase quickly (i.e. from 0.1 to 0.9 in 0.4 seconds)
-        _throttle_low_comp += min(2.0f/_loop_rate, _throttle_low_comp_desired-_throttle_low_comp);
-    } else if (_throttle_low_comp > _throttle_low_comp_desired) {
+        _throttle_thr_mix += min(2.0f/_loop_rate, _throttle_thr_mix_desired-_throttle_thr_mix);
+    } else if (_throttle_thr_mix > _throttle_thr_mix_desired) {
         // reduce more slowly (from 0.9 to 0.1 in 1.6 seconds)
-        _throttle_low_comp -= min(0.5f/_loop_rate, _throttle_low_comp-_throttle_low_comp_desired);
+        _throttle_thr_mix -= min(0.5f/_loop_rate, _throttle_thr_mix-_throttle_thr_mix_desired);
     }
-    _throttle_low_comp = constrain_float(_throttle_low_comp, 0.1f, 1.0f);
+    _throttle_thr_mix = constrain_float(_throttle_thr_mix, 0.1f, 1.0f);
+}
+
+float AP_Motors::get_compensation_gain() const
+{
+    // avoid divide by zero
+    if (_lift_max <= 0.0f) {
+        return 1.0f;
+    }
+
+    float ret = 1.0f / _lift_max;
+
+    // air density ratio is increasing in density / decreasing in altitude
+    if (_air_density_ratio > 0.3f && _air_density_ratio < 1.5f) {
+        ret *= 1.0f / constrain_float(_air_density_ratio,0.5f,1.25f);
+    }
+    return ret;
 }
 
 float AP_Motors::rel_pwm_to_thr_range(float pwm) const

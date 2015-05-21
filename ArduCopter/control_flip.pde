@@ -45,7 +45,7 @@ static bool flip_init(bool ignore_checks)
     }
 
     // if in acro or stabilize ensure throttle is above zero
-    if ((g.rc_3.control_in <= 0) && (control_mode == ACRO || control_mode == STABILIZE)) {
+    if (ap.throttle_zero && (control_mode == ACRO || control_mode == STABILIZE)) {
         return false;
     }
 
@@ -188,14 +188,14 @@ static void flip_run()
 
         if (flip_roll_dir != 0) {
             // we are rolling
-            recovery_angle = fabs(flip_orig_attitude.x - (float)ahrs.roll_sensor);
+            recovery_angle = fabsf(flip_orig_attitude.x - (float)ahrs.roll_sensor);
         } else {
             // we are pitching
-            recovery_angle = fabs(flip_orig_attitude.y - (float)ahrs.pitch_sensor);
+            recovery_angle = fabsf(flip_orig_attitude.y - (float)ahrs.pitch_sensor);
         }
 
         // check for successful recovery
-        if (fabs(recovery_angle) <= FLIP_RECOVERY_ANGLE) {
+        if (fabsf(recovery_angle) <= FLIP_RECOVERY_ANGLE) {
             // restore original flight mode
             if (!set_mode(flip_orig_control_mode)) {
                 // this should never happen but just in case
@@ -218,7 +218,7 @@ static void flip_run()
     }
 
     // output pilot's throttle without angle boost
-    if (throttle_out == 0.0f) {
+    if (throttle_out == 0) {
         attitude_control.set_throttle_out_unstabilized(0,false,g.throttle_filt);
     } else {
         attitude_control.set_throttle_out(throttle_out, false, g.throttle_filt);

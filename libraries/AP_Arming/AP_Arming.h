@@ -38,7 +38,7 @@ public:
     };
 
     //for the hacky funciton pointer to gcs_send_text_p
-    typedef void (*gcs_send_t_p)(gcs_severity, const prog_char_t*);
+    typedef DELEGATE_FUNCTION2(void, gcs_severity, const prog_char_t*) gcs_send_t_p;
 
     AP_Arming(const AP_AHRS &ahrs_ref, const AP_Baro &baro, Compass &compass,
               const enum HomeState &home_set, gcs_send_t_p);
@@ -77,8 +77,8 @@ private:
     Compass                                         &_compass;
     const enum HomeState                         &home_is_set;
     gcs_send_t_p                              gcs_send_text_P;
-    uint32_t                                  last_accel_pass_ms;
-    uint32_t                                  last_gyro_pass_ms;
+    uint32_t                                  last_accel_pass_ms[INS_MAX_INSTANCES];
+    uint32_t                                  last_gyro_pass_ms[INS_MAX_INSTANCES];
 
     void set_enabled_checks(uint16_t);
 

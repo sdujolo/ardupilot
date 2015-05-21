@@ -139,6 +139,11 @@ static void init_ardupilot()
     gcs[2].setup_uart(serial_manager, AP_SerialManager::SerialProtocol_MAVLink, 1);
 #endif
 
+#if MAVLINK_COMM_NUM_BUFFERS > 3
+    // setup serial port for fourth telemetry port (not used by default)
+    gcs[3].setup_uart(serial_manager, AP_SerialManager::SerialProtocol_MAVLink, 2);
+#endif
+
 #if FRSKY_TELEM_ENABLED == ENABLED
     // setup frsky
     frsky_telemetry.init(serial_manager);
@@ -261,6 +266,9 @@ static void init_ardupilot()
     // enable CPU failsafe
     failsafe_enable();
 
+    ins.set_raw_logging(should_log(MASK_LOG_IMU_RAW));
+    ins.set_dataflash(&DataFlash);
+
     cliSerial->print_P(PSTR("\nReady to FLY "));
 
     // flag that initialisation has completed
@@ -291,9 +299,6 @@ static void startup_ground(bool force_gyro_cal)
     if (force_gyro_cal) {
         ahrs.reset_gyro_drift();
     }
-
-    // setup fast AHRS gains to get right attitude
-    ahrs.set_fast_gains(true);
 
     // set landed flag
     set_land_complete(true);
@@ -386,12 +391,12 @@ static void check_usb_mux(void)
 
 // frsky_telemetry_send - sends telemetry data using frsky telemetry
 //  should be called at 5Hz by scheduler
+#if FRSKY_TELEM_ENABLED == ENABLED
 static void frsky_telemetry_send(void)
 {
-#if FRSKY_TELEM_ENABLED == ENABLED
     frsky_telemetry.send_frames((uint8_t)control_mode);
-#endif
 }
+#endif
 
 /*
   should we log a message type now?

@@ -684,7 +684,7 @@ static bool verify_circle(const AP_Mission::Mission_Command& cmd)
             Vector3f circle_center = pv_location_to_vector(cmd.content.location);
 
             // set target altitude if not provided
-            if (circle_center.z == 0) {
+            if (is_zero(circle_center.z)) {
                 circle_center.z = curr_pos.z;
             }
 
@@ -701,7 +701,7 @@ static bool verify_circle(const AP_Mission::Mission_Command& cmd)
     }
 
     // check if we have completed circling
-    return fabsf(circle_nav.get_angle_total()/(2*M_PI)) >= (float)LOWBYTE(cmd.p1);
+    return fabsf(circle_nav.get_angle_total()/M_2PI_F) >= LOWBYTE(cmd.p1);
 }
 
 // externs to remove compiler warning
@@ -712,7 +712,7 @@ extern bool rtl_state_complete;
 // returns true with RTL has completed successfully
 static bool verify_RTL()
 {
-    return (rtl_state_complete && (rtl_state == FinalDescent || rtl_state == Land));
+    return (rtl_state_complete && (rtl_state == RTL_FinalDescent || rtl_state == RTL_Land));
 }
 
 // verify_spline_wp - check if we have reached the next way point using spline

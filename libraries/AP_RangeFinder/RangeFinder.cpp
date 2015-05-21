@@ -40,14 +40,14 @@ const AP_Param::GroupInfo RangeFinder::var_info[] PROGMEM = {
     // @Description: Scaling factor between rangefinder reading and distance. For the linear and inverted functions this is in meters per volt. For the hyperbolic function the units are meterVolts.
     // @Units: meters/Volt
     // @Increment: 0.001
-    AP_GROUPINFO("_SCALING", 2, RangeFinder, _scaling[0], 3.0),
+    AP_GROUPINFO("_SCALING", 2, RangeFinder, _scaling[0], 3.0f),
 
     // @Param: _OFFSET
     // @DisplayName: rangefinder offset
     // @Description: Offset in volts for zero distance for analog rangefinders. Offset added to distance in centimeters for PWM and I2C Lidars
     // @Units: Volts
     // @Increment: 0.001
-    AP_GROUPINFO("_OFFSET",  3, RangeFinder, _offset[0], 0.0),
+    AP_GROUPINFO("_OFFSET",  3, RangeFinder, _offset[0], 0.0f),
 
     // @Param: _FUNCTION
     // @DisplayName: Rangefinder function
@@ -95,6 +95,15 @@ const AP_Param::GroupInfo RangeFinder::var_info[] PROGMEM = {
     // @Range: 0 32767
     AP_GROUPINFO("_PWRRNG", 10, RangeFinder, _powersave_range, 0),
 
+    // @Param: _GNDCLEAR
+    // @DisplayName: Distance (in cm) from the range finder to the ground
+    // @Description: This parameter sets the expected range measurement(in cm) that the range finder should return when the vehicle is on the ground.
+    // @Units: centimeters
+    // @Range: 0 127
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("_GNDCLEAR", 11, RangeFinder, _ground_clearance_cm[0], RANGEFINDER_GROUND_CLEARANCE_CM_DEFAULT),
+
     // 10..12 left for future expansion
 
 #if RANGEFINDER_MAX_INSTANCES > 1
@@ -115,14 +124,14 @@ const AP_Param::GroupInfo RangeFinder::var_info[] PROGMEM = {
     // @Description: Scaling factor between rangefinder reading and distance. For the linear and inverted functions this is in meters per volt. For the hyperbolic function the units are meterVolts.
     // @Units: meters/Volt
     // @Increment: 0.001
-    AP_GROUPINFO("2_SCALING", 14, RangeFinder, _scaling[1], 3.0),
+    AP_GROUPINFO("2_SCALING", 14, RangeFinder, _scaling[1], 3.0f),
 
     // @Param: 2_OFFSET
     // @DisplayName: rangefinder offset
     // @Description: Offset in volts for zero distance
     // @Units: Volts
     // @Increment: 0.001
-    AP_GROUPINFO("2_OFFSET",  15, RangeFinder, _offset[1], 0.0),
+    AP_GROUPINFO("2_OFFSET",  15, RangeFinder, _offset[1], 0.0f),
 
     // @Param: 2_FUNCTION
     // @DisplayName: Rangefinder function
@@ -162,6 +171,15 @@ const AP_Param::GroupInfo RangeFinder::var_info[] PROGMEM = {
     // @Description: This parameter sets whether an analog rangefinder is ratiometric. Most analog rangefinders are ratiometric, meaning that their output voltage is influenced by the supply voltage. Some analog rangefinders (such as the SF/02) have their own internal voltage regulators so they are not ratiometric.
     // @Values: 0:No,1:Yes
     AP_GROUPINFO("2_RMETRIC", 21, RangeFinder, _ratiometric[1], 1),
+
+    // @Param: 2_GNDCLEAR
+    // @DisplayName: Distance (in cm) from the second range finder to the ground
+    // @Description: This parameter sets the expected range measurement(in cm) that the second range finder should return when the vehicle is on the ground.
+    // @Units: centimeters
+    // @Range: 0 127
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("2_GNDCLEAR", 22, RangeFinder, _ground_clearance_cm[1], RANGEFINDER_GROUND_CLEARANCE_CM_DEFAULT),
 #endif
 
     AP_GROUPEND
@@ -185,6 +203,14 @@ void RangeFinder::init(void)
             // present (although it may not be healthy)
             num_instances = i+1;
         }
+        // initialise pre-arm check variables
+        state[i].pre_arm_check = false;
+        state[i].pre_arm_distance_min = 9999;  // initialise to an arbitrary large value
+        state[i].pre_arm_distance_max = 0;
+
+        // initialise status
+        state[i].status = RangeFinder_NotConnected;
+        state[i].range_valid_count = 0;
     }
 }
 
@@ -198,16 +224,18 @@ void RangeFinder::update(void)
         if (drivers[i] != NULL) {
             if (_type[i] == RangeFinder_TYPE_NONE) {
                 // allow user to disable a rangefinder at runtime
-                state[i].healthy = false;
+                state[i].status = RangeFinder_NotConnected;
+                state[i].range_valid_count = 0;
                 continue;
             }
             drivers[i]->update();
+            update_pre_arm_check(i);
         }
     }
 
-    // work out primary instance - first healthy sensor
+    // work out primary instance - first sensor returning good data
     for (int8_t i=num_instances-1; i>=0; i--) {
-        if (drivers[i] != NULL && state[i].healthy) {
+        if (drivers[i] != NULL && (state[i].status == RangeFinder_Good)) {
             primary_instance = i;
         }
     }
@@ -267,3 +295,69 @@ void RangeFinder::detect_instance(uint8_t instance)
     }
 }
 
+// query status
+RangeFinder::RangeFinder_Status RangeFinder::status(uint8_t instance) const
+{
+    // sanity check instance
+    if (instance > RANGEFINDER_MAX_INSTANCES) {
+        return RangeFinder_NotConnected;
+    }
+
+    if (drivers[instance] == NULL || _type[instance] == RangeFinder_TYPE_NONE) {
+        return RangeFinder_NotConnected;
+    }
+
+    return state[instance].status;
+}
+
+// true if sensor is returning data
+bool RangeFinder::has_data(uint8_t instance) const
+{
+    // sanity check instance
+    if (instance > RANGEFINDER_MAX_INSTANCES) {
+        return RangeFinder_NotConnected;
+    }
+    return ((state[instance].status != RangeFinder_NotConnected) && (state[instance].status != RangeFinder_NoData));
+}
+
+/*
+  returns true if pre-arm checks have passed for all range finders
+  these checks involve the user lifting or rotating the vehicle so that sensor readings between
+  the min and 2m can be captured
+ */
+bool RangeFinder::pre_arm_check() const
+{
+    for (uint8_t i=0; i<num_instances; i++) {
+        // if driver is valid but pre_arm_check is false, return false
+        if ((drivers[i] != NULL) && (_type[i] != RangeFinder_TYPE_NONE) && !state[i].pre_arm_check) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+  set pre-arm checks to passed if the range finder has been exercised through a reasonable range of movement
+      max distance sensed is at least 50cm > min distance sensed
+      max distance < 200cm
+      min distance sensed is within 10cm of ground clearance or sensor's minimum distance
+ */
+void RangeFinder::update_pre_arm_check(uint8_t instance)
+{
+    // return immediately if already passed or no sensor data
+    if (state[instance].pre_arm_check || state[instance].status == RangeFinder_NotConnected || state[instance].status == RangeFinder_NoData) {
+        return;
+    }
+
+    // update min, max captured distances
+    state[instance].pre_arm_distance_min = min(state[instance].distance_cm, state[instance].pre_arm_distance_min);
+    state[instance].pre_arm_distance_max = max(state[instance].distance_cm, state[instance].pre_arm_distance_max);
+
+    // Check that the range finder has been exercised through a realistic range of movement
+    if (((state[instance].pre_arm_distance_max - state[instance].pre_arm_distance_min) > RANGEFINDER_PREARM_REQUIRED_CHANGE_CM) &&
+         (state[instance].pre_arm_distance_max < RANGEFINDER_PREARM_ALT_MAX_CM) &&
+         ((int16_t)state[instance].pre_arm_distance_min < (max(_ground_clearance_cm[instance],min_distance_cm(instance)) + 10)) &&
+         ((int16_t)state[instance].pre_arm_distance_min > (min(_ground_clearance_cm[instance],min_distance_cm(instance)) - 10))) {
+        state[instance].pre_arm_check = true;
+    }
+}

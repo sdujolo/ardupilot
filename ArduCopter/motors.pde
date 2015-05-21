@@ -3,7 +3,9 @@
 #define ARM_DELAY               20  // called at 10hz so 2 seconds
 #define DISARM_DELAY            20  // called at 10hz so 2 seconds
 #define AUTO_TRIM_DELAY         100 // called at 10hz so 10 seconds
-#define AUTO_DISARMING_DELAY    15  // called at 1hz so 15 seconds
+#define AUTO_DISARMING_DELAY_LONG   15  // called at 1hz so 15 seconds
+#define AUTO_DISARMING_DELAY_SHORT   5  // called at 1hz so 5 seconds
+#define LOST_VEHICLE_DELAY      10  // called at 10hz so 1 second
 
 static uint8_t auto_disarming_counter;
 
@@ -71,17 +73,29 @@ static void arm_motors_check()
 // called at 1hz
 static void auto_disarm_check()
 {
-    // exit immediately if we are already disarmed or throttle is not zero
+
+    uint8_t delay;
+
+    // exit immediately if we are already disarmed or throttle output is not zero,
     if (!motors.armed() || !ap.throttle_zero) {
         auto_disarming_counter = 0;
         return;
     }
 
     // allow auto disarm in manual flight modes or Loiter/AltHold if we're landed
-    if (mode_has_manual_throttle(control_mode) || ap.land_complete) {
+    // always allow auto disarm if using interlock switch or motors are Emergency Stopped
+    if (mode_has_manual_throttle(control_mode) || ap.land_complete || (ap.using_interlock && !motors.get_interlock()) || ap.motor_emergency_stop) {
         auto_disarming_counter++;
 
-        if(auto_disarming_counter >= AUTO_DISARMING_DELAY) {
+        // use a shorter delay if using throttle interlock switch or Emergency Stop, because it is less
+        // obvious the copter is armed as the motors will not be spinning
+        if (ap.using_interlock || ap.motor_emergency_stop){
+            delay = AUTO_DISARMING_DELAY_SHORT;
+        } else {
+            delay = AUTO_DISARMING_DELAY_LONG;
+        }
+
+        if(auto_disarming_counter >= delay) {
             init_disarm_motors();
             auto_disarming_counter = 0;
         }
@@ -127,7 +141,7 @@ static bool init_arm_motors(bool arming_from_gcs)
         update_notify();
     }
 
-#if HIL_MODE != HIL_MODE_DISABLED || CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if HIL_MODE != HIL_MODE_DISABLED || CONFIG_HAL_BOARD == HAL_BOARD_SITL
     gcs_send_text_P(SEVERITY_HIGH, PSTR("ARMING MOTORS"));
 #endif
 
@@ -156,8 +170,26 @@ static bool init_arm_motors(bool arming_from_gcs)
         did_ground_start = true;
     }
 
-    // go back to normal AHRS gains
-    ahrs.set_fast_gains(false);
+    // check if we are using motor interlock control on an aux switch
+    set_using_interlock(check_if_auxsw_mode_used(AUXSW_MOTOR_INTERLOCK));
+
+    // if we are using motor interlock switch and it's enabled, fail to arm
+    if (ap.using_interlock && motors.get_interlock()){
+        gcs_send_text_P(SEVERITY_HIGH,PSTR("Arm: Motor Interlock Enabled"));
+        AP_Notify::flags.armed = false;
+        return false;
+    }
+
+    // if we are not using Emergency Stop switch option, force Estop false to ensure motors
+    // can run normally
+    if (!check_if_auxsw_mode_used(AUXSW_MOTOR_ESTOP)){
+        set_motor_emergency_stop(false);
+    // if we are using motor Estop switch, it must not be in Estop position
+    } else if (check_if_auxsw_mode_used(AUXSW_MOTOR_ESTOP) && ap.motor_emergency_stop){
+        gcs_send_text_P(SEVERITY_HIGH,PSTR("Arm: Motor Emergency Stopped"));
+        AP_Notify::flags.armed = false;
+        return false;
+    }
 
     // enable gps velocity based centrefugal force compensation
     ahrs.set_correct_centrifugal(true);
@@ -175,7 +207,7 @@ static bool init_arm_motors(bool arming_from_gcs)
     delay(30);
 
     // enable output to motors
-    output_min();
+    enable_motor_output();
 
     // finally actually arm the motors
     motors.armed(true);
@@ -206,6 +238,36 @@ static bool pre_arm_checks(bool display_failure)
     // exit immediately if already armed
     if (motors.armed()) {
         return true;
+    }
+
+    // check if motor interlock and Emergency Stop aux switches are used
+    // at the same time.  This cannot be allowed.
+    if (check_if_auxsw_mode_used(AUXSW_MOTOR_INTERLOCK) && check_if_auxsw_mode_used(AUXSW_MOTOR_ESTOP)){
+        if (display_failure) {
+            gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: Interlock/E-Stop Conflict"));
+        }
+        return false;
+    }
+
+    // check if motor interlock aux switch is in use
+    // if it is, switch needs to be in disabled position to arm
+    // otherwise exit immediately.  This check to be repeated, 
+    // as state can change at any time.
+    set_using_interlock(check_if_auxsw_mode_used(AUXSW_MOTOR_INTERLOCK));
+    if (ap.using_interlock && motors.get_interlock()){
+        if (display_failure) {
+            gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: Motor Interlock Enabled"));
+        }
+        return false;
+    }
+
+    // if we are using Motor Emergency Stop aux switch, check it is not enabled 
+    // and warn if it is
+    if (check_if_auxsw_mode_used(AUXSW_MOTOR_ESTOP) && ap.motor_emergency_stop){
+        if (display_failure) {
+            gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: Motor Emergency Stopped"));
+        }
+        return false;
     }
 
     // exit immediately if we've already successfully performed the pre-arm check
@@ -246,7 +308,7 @@ static bool pre_arm_checks(bool display_failure)
         nav_filter_status filt_status = inertial_nav.get_filter_status();
         bool using_baro_ref = (!filt_status.flags.pred_horiz_pos_rel && filt_status.flags.pred_horiz_pos_abs);
         if (using_baro_ref) {
-            if (fabs(inertial_nav.get_altitude() - baro_alt) > PREARM_MAX_ALT_DISPARITY_CM) {
+            if (fabsf(inertial_nav.get_altitude() - baro_alt) > PREARM_MAX_ALT_DISPARITY_CM) {
                 if (display_failure) {
                     gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: Altitude disparity"));
                 }
@@ -284,7 +346,7 @@ static bool pre_arm_checks(bool display_failure)
 
         // check for unreasonable mag field length
         float mag_field = compass.get_field().length();
-        if (mag_field > COMPASS_MAGFIELD_EXPECTED*1.65 || mag_field < COMPASS_MAGFIELD_EXPECTED*0.35) {
+        if (mag_field > COMPASS_MAGFIELD_EXPECTED*1.65f || mag_field < COMPASS_MAGFIELD_EXPECTED*0.35f) {
             if (display_failure) {
                 gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: Check mag field"));
             }
@@ -331,9 +393,9 @@ static bool pre_arm_checks(bool display_failure)
     // check INS
     if ((g.arming_check == ARMING_CHECK_ALL) || (g.arming_check & ARMING_CHECK_INS)) {
         // check accelerometers have been calibrated
-        if(!ins.calibrated()) {
+        if(!ins.accel_calibrated_ok_all()) {
             if (display_failure) {
-                gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: INS not calibrated"));
+                gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: Accels not calibrated"));
             }
             return false;
         }
@@ -354,7 +416,16 @@ static bool pre_arm_checks(bool display_failure)
                 // get next accel vector
                 const Vector3f &accel_vec = ins.get_accel(i);
                 Vector3f vec_diff = accel_vec - prime_accel_vec;
-                if (vec_diff.length() > PREARM_MAX_ACCEL_VECTOR_DIFF) {
+                float threshold = PREARM_MAX_ACCEL_VECTOR_DIFF;
+                if (i >= 2) {
+                    /*
+                      for boards with 3 IMUs we only use the first two
+                      in the EKF. Allow for larger accel discrepancy
+                      for IMU3 as it may be running at a different temperature
+                     */
+                    threshold *= 2;
+                }
+                if (vec_diff.length() > threshold) {
                     if (display_failure) {
                         gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: inconsistent Accelerometers"));
                     }
@@ -439,6 +510,16 @@ static bool pre_arm_checks(bool display_failure)
             }
             return false;
         }
+
+#if CONFIG_SONAR == ENABLED
+        // check range finder
+        if (!sonar.pre_arm_check()) {
+            if (display_failure) {
+                gcs_send_text_P(SEVERITY_HIGH,PSTR("PreArm: check range finder"));
+            }
+            return false;
+        }
+#endif
     }
 
     // if we've gotten this far then pre arm checks have completed
@@ -585,7 +666,7 @@ static bool arm_checks(bool display_failure, bool arming_from_gcs)
     // heli specific arming check
     if (!motors.allow_arming()){
         if (display_failure) {
-            gcs_send_text_P(SEVERITY_HIGH,PSTR("Arm: Rotor not spinning"));
+            gcs_send_text_P(SEVERITY_HIGH,PSTR("Arm: stop Rotor spinning"));
         }
         return false;
     }
@@ -602,7 +683,7 @@ static bool arm_checks(bool display_failure, bool arming_from_gcs)
     nav_filter_status filt_status = inertial_nav.get_filter_status();
     bool using_baro_ref = (!filt_status.flags.pred_horiz_pos_rel && filt_status.flags.pred_horiz_pos_abs);
     if (((g.arming_check == ARMING_CHECK_ALL) || (g.arming_check & ARMING_CHECK_BARO)) && using_baro_ref) {
-        if (fabs(inertial_nav.get_altitude() - baro_alt) > PREARM_MAX_ALT_DISPARITY_CM) {
+        if (fabsf(inertial_nav.get_altitude() - baro_alt) > PREARM_MAX_ALT_DISPARITY_CM) {
             if (display_failure) {
                 gcs_send_text_P(SEVERITY_HIGH,PSTR("Arm: Altitude disparity"));
             }
@@ -617,7 +698,7 @@ static bool arm_checks(bool display_failure, bool arming_from_gcs)
 
     // check lean angle
     if ((g.arming_check == ARMING_CHECK_ALL) || (g.arming_check & ARMING_CHECK_INS)) {
-        if (labs(ahrs.roll_sensor) > aparm.angle_max || labs(ahrs.pitch_sensor) > aparm.angle_max) {
+        if (degrees(acosf(ahrs.cos_roll()*ahrs.cos_pitch()))*100.0f > aparm.angle_max) {
             if (display_failure) {
                 gcs_send_text_P(SEVERITY_HIGH,PSTR("Arm: Leaning"));
             }
@@ -638,7 +719,7 @@ static bool arm_checks(bool display_failure, bool arming_from_gcs)
         // check throttle is not too high - skips checks if arming from GCS in Guided
         if (!(arming_from_gcs && control_mode == GUIDED)) {
             // above top of deadband is too always high
-            if (g.rc_3.control_in > (g.rc_3.get_control_mid() + g.throttle_deadzone)) {
+            if (g.rc_3.control_in > get_takeoff_trigger_throttle()) {
                 if (display_failure) {
                     gcs_send_text_P(SEVERITY_HIGH,PSTR("Arm: Throttle too high"));
                 }
@@ -674,10 +755,11 @@ static void init_disarm_motors()
         return;
     }
 
-#if HIL_MODE != HIL_MODE_DISABLED || CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if HIL_MODE != HIL_MODE_DISABLED || CONFIG_HAL_BOARD == HAL_BOARD_SITL
     gcs_send_text_P(SEVERITY_HIGH, PSTR("DISARMING MOTORS"));
 #endif
 
+    // send disarm command to motors
     motors.armed(false);
 
     // save compass offsets learned by the EKF
@@ -697,9 +779,6 @@ static void init_disarm_motors()
 
     // reset the mission
     mission.reset();
-
-    // setup fast AHRS gains to get right attitude
-    ahrs.set_fast_gains(true);
 
     // log disarm to the dataflash
     Log_Write_Event(DATA_DISARMED);
@@ -721,6 +800,41 @@ static void motors_output()
     if (ap.motor_test) {
         motor_test_output();
     } else {
+        if (!ap.using_interlock){
+            // if not using interlock switch, set according to Emergency Stop status
+            // where Emergency Stop is forced false during arming if Emergency Stop switch
+            // is not used. Interlock enabled means motors run, so we must
+            // invert motor_emergency_stop status for motors to run.
+            motors.set_interlock(!ap.motor_emergency_stop);
+        }
         motors.output();
+    }
+}
+
+// check for pilot stick input to trigger lost vehicle alarm
+static void lost_vehicle_check()
+{
+    static uint8_t soundalarm_counter;
+
+    // disable if aux switch is setup to vehicle alarm as the two could interfere
+    if (check_if_auxsw_mode_used(AUXSW_LOST_COPTER_SOUND)) {
+        return;
+    }
+
+    // ensure throttle is down, motors not armed, pitch and roll rc at max. Note: rc1=roll rc2=pitch
+    if (ap.throttle_zero && !motors.armed() && (g.rc_1.control_in > 4000) && (g.rc_2.control_in > 4000)) {
+        if (soundalarm_counter >= LOST_VEHICLE_DELAY) {
+            if (AP_Notify::flags.vehicle_lost == false) {
+                AP_Notify::flags.vehicle_lost = true;
+                gcs_send_text_P(SEVERITY_HIGH,PSTR("Locate Copter Alarm!"));
+            }
+        } else {
+            soundalarm_counter++;
+        }
+    } else {
+        soundalarm_counter = 0;
+        if (AP_Notify::flags.vehicle_lost == true) {
+            AP_Notify::flags.vehicle_lost = false;
+        }
     }
 }

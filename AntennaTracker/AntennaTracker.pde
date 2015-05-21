@@ -1,6 +1,6 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
-#define THISFIRMWARE "AntennaTracker V0.4"
+#define THISFIRMWARE "AntennaTracker V0.7"
 /*
    Lead developers: Matthew Ridley and Andrew Tridgell
  
@@ -64,6 +64,7 @@
 #include <RC_Channel.h>
 #include <AP_BoardConfig.h>
 #include <AP_OpticalFlow.h>
+#include <AP_RangeFinder.h>
 
 // Configuration
 #include "config.h"
@@ -75,7 +76,7 @@
 #include "GCS.h"
 
 #include <AP_HAL_AVR.h>
-#include <AP_HAL_AVR_SITL.h>
+#include <AP_HAL_SITL.h>
 #include <AP_HAL_PX4.h>
 #include <AP_HAL_FLYMAPLE.h>
 #include <AP_HAL_Linux.h>
@@ -128,14 +129,16 @@ AP_ADC_ADS7844 apm1_adc;
 
 AP_InertialSensor ins;
 
+static RangeFinder rng;
+
 // Inertial Navigation EKF
 #if AP_AHRS_NAVEKF_AVAILABLE
-AP_AHRS_NavEKF ahrs(ins, barometer, gps);
+AP_AHRS_NavEKF ahrs(ins, barometer, gps, rng);
 #else
 AP_AHRS_DCM ahrs(ins, barometer, gps);
 #endif
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 SITL sitl;
 #endif
 
@@ -240,16 +243,18 @@ void setup()
     // load the default values of variables listed in var_info[]
     AP_Param::setup_sketch_defaults();
 
+    // initialise notify
+    notify.init(false);
+
     // antenna tracker does not use pre-arm checks or battery failsafe
     AP_Notify::flags.pre_arm_check = true;
     AP_Notify::flags.pre_arm_gps_check = true;
     AP_Notify::flags.failsafe_battery = false;
 
-    notify.init(false);
     init_tracker();
 
     // initialise the main loop scheduler
-    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]));
+    scheduler.init(&scheduler_tasks[0], sizeof(scheduler_tasks)/sizeof(scheduler_tasks[0]), NULL);
 }
 
 /**

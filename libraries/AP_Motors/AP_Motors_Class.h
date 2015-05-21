@@ -63,6 +63,9 @@
 #define AP_MOTORS_THST_BAT_MIN_DEFAULT  0.0f
 #define AP_MOTORS_CURR_MAX_DEFAULT      0.0f    // current limiting max default
 #define AP_MOTORS_BATT_VOLT_FILT_HZ     0.5f    // battery voltage filtered at 0.5hz
+#define AP_MOTORS_THR_MIX_MIN_DEFAULT   0.1f    // minimum throttle mix
+#define AP_MOTORS_THR_MIX_MID_DEFAULT   0.5f    // manual throttle mix
+#define AP_MOTORS_THR_MIX_MAX_DEFAULT   0.9f    // maximum throttle mix
 
 // bit mask for recording which limits we have reached when outputting to motors
 #define AP_MOTOR_NO_LIMITS_REACHED  0x00
@@ -72,7 +75,7 @@
 #define AP_MOTOR_ANY_LIMIT          0xFF
 
 // To-Do: replace this hard coded counter with a timer
-#if HAL_CPU_CLASS < HAL_CPU_CLASS_75 || CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL || CONFIG_HAL_BOARD == HAL_BOARD_LINUX
+#if HAL_CPU_CLASS < HAL_CPU_CLASS_75 || CONFIG_HAL_BOARD == HAL_BOARD_SITL || CONFIG_HAL_BOARD == HAL_BOARD_LINUX
  // slow start increments - throttle increase per (100hz) iteration.  i.e. 5 = full speed in 2 seconds
  #define AP_MOTOR_SLOW_START_INCREMENT           10      // max throttle ramp speed (i.e. motors can reach full throttle in 1 second)
  #define AP_MOTOR_SLOW_START_LOW_END_INCREMENT   2       // min throttle ramp speed (i.e. motors will speed up from zero to _spin_when_armed speed in about 1 second)
@@ -104,6 +107,12 @@ public:
     bool                armed() const { return _flags.armed; };
     void                armed(bool arm);
 
+    // set motor interlock status
+    void                set_interlock(bool set) { _flags.interlock = set;}
+
+    // get motor interlock status.  true means motors run, false motors don't run
+    bool                get_interlock() const { return _flags.interlock; };
+
     // set_min_throttle - sets the minimum throttle that will be sent to the engines when they're not off (i.e. to prevents issues with some motors spinning and some not at very low throttle)
     void                set_min_throttle(uint16_t min_throttle);
 
@@ -121,7 +130,7 @@ public:
     void                set_roll(int16_t roll_in) { _rc_roll.servo_out = roll_in; };                    // range -4500 ~ 4500
     void                set_pitch(int16_t pitch_in) { _rc_pitch.servo_out = pitch_in; };                // range -4500 ~ 4500
     void                set_yaw(int16_t yaw_in) { _rc_yaw.servo_out = yaw_in; };                        // range -4500 ~ 4500
-    void                set_throttle(int16_t throttle_in) { _throttle_in = throttle_in; };    // range 0 ~ 1000
+    void                set_throttle(float throttle_in) { _throttle_in = throttle_in; };    // range 0 ~ 1000
     void                set_stabilizing(bool stabilizing) { _flags.stabilizing = stabilizing; }
 
     // accessors for roll, pitch, yaw and throttle inputs to motors
@@ -156,13 +165,18 @@ public:
     // set_current - set current to be used for output scaling
     virtual void        set_current(float current){ _batt_current = current; }
 
-    // set_throttle_low_comp - set desired throttle_low_comp (actual throttle_low_comp is slewed towards this value over 1~2 seconds)
+    // set_density_ratio - sets air density as a proportion of sea level density
+    void                set_air_density_ratio(float ratio) { _air_density_ratio = ratio; }
+
+    // set_throttle_thr_mix - set desired throttle_thr_mix (actual throttle_thr_mix is slewed towards this value over 1~2 seconds)
     //  low values favour pilot/autopilot throttle over attitude control, high values favour attitude control over throttle
     //  has no effect when throttle is above hover throttle
-    void                set_throttle_low_comp(float throttle_low_comp) { _throttle_low_comp_desired = throttle_low_comp; }
+    void                set_throttle_mix_min() { _throttle_thr_mix_desired = _thr_mix_min; }
+    void                set_throttle_mix_mid() { _throttle_thr_mix_desired = AP_MOTORS_THR_MIX_MID_DEFAULT; }
+    void                set_throttle_mix_max() { _throttle_thr_mix_desired = AP_MOTORS_THR_MIX_MAX_DEFAULT; }
 
-    // get_throttle_low_comp - get low throttle compensation value
-    float               get_throttle_low_comp() { return _throttle_low_comp; }
+    // get_throttle_thr_mix - get low throttle compensation value
+    bool                is_throttle_mix_min() { return (_throttle_thr_mix < 1.25f*_thr_mix_min); }
 
     // get_lift_max - get maximum lift ratio
     float               get_lift_max() { return _lift_max; }
@@ -175,6 +189,9 @@ public:
 
     // get_throttle_limit - throttle limit ratio
     float               get_throttle_limit() { return _throttle_limit; }
+
+    // returns warning throttle
+    float               get_throttle_warn() { return rel_pwm_to_thr_range(_spin_when_armed); }
 
     // 1 if motor is enabled, 0 otherwise
     bool                motor_enabled[AP_MOTORS_MAX_NUM_MOTORS];
@@ -202,6 +219,7 @@ protected:
     // output functions that should be overloaded by child classes
     virtual void        output_armed_stabilizing()=0;
     virtual void        output_armed_not_stabilizing()=0;
+    virtual void        output_armed_zero_throttle() { output_min(); }
     virtual void        output_disarmed()=0;
 
     // update the throttle input filter
@@ -222,11 +240,11 @@ protected:
     // update_battery_resistance - calculate battery resistance when throttle is above hover_out
     void                update_battery_resistance();
 
-    // update_throttle_low_comp - updates thr_low_comp value towards the target
-    void                update_throttle_low_comp();
+    // update_throttle_thr_mix - updates thr_low_comp value towards the target
+    void                update_throttle_thr_mix();
 
-    // get_voltage_comp_gain - return battery voltage compensation gain
-    float               get_voltage_comp_gain() const { return 1.0f/_lift_max; }
+    // return gain scheduling gain based on voltage and air density
+    float               get_compensation_gain() const;
 
     float               rel_pwm_to_thr_range(float pwm) const;
     float               thr_range_to_rel_pwm(float thr) const;
@@ -238,6 +256,7 @@ protected:
         uint8_t frame_orientation  : 4;    // PLUS_FRAME 0, X_FRAME 1, V_FRAME 2, H_FRAME 3, NEW_PLUS_FRAME 10, NEW_X_FRAME, NEW_V_FRAME, NEW_H_FRAME
         uint8_t slow_start         : 1;    // 1 if slow start is active
         uint8_t slow_start_low_end : 1;    // 1 just after arming so we can ramp up the spin_when_armed value
+        uint8_t interlock          : 1;    // 1 if the motor interlock is enabled (i.e. motors run), 0 if disabled (motors don't run)
     } _flags;
 
     // mapping of motor number (as received from upper APM code) to RC channel output - used to account for differences between APM1 and APM2
@@ -252,6 +271,7 @@ protected:
     AP_Float            _batt_voltage_max;      // maximum voltage used to scale lift
     AP_Float            _batt_voltage_min;      // minimum voltage used to scale lift
     AP_Float            _batt_current_max;      // current over which maximum throttle is limited
+    AP_Float            _thr_mix_min;           // current over which maximum throttle is limited
 
     // internal variables
     RC_Channel&         _rc_roll;               // roll input in from users is held in servo_out
@@ -264,8 +284,8 @@ protected:
     int16_t             _max_throttle;          // the maximum throttle to be sent to the motors (sometimes limited by slow start)
     int16_t             _hover_out;             // the estimated hover throttle as pct * 10 (i.e. 0 ~ 1000)
     int16_t             _spin_when_armed_ramped;// equal to _spin_when_armed parameter but slowly ramped up from zero
-    float               _throttle_low_comp;     // mix between throttle and hover throttle for 0 to 1 and ratio above hover throttle for >1
-    float               _throttle_low_comp_desired; // desired throttle_low_comp value, actual throttle_low_comp is slewed towards this value over 1~2 seconds
+    float               _throttle_thr_mix;      // mix between throttle and hover throttle for 0 to 1 and ratio above hover throttle for >1
+    float               _throttle_thr_mix_desired; // desired throttle_low_comp value, actual throttle_low_comp is slewed towards this value over 1~2 seconds
 
     // battery voltage compensation variables
     float               _batt_voltage;          // latest battery voltage reading
@@ -275,6 +295,7 @@ protected:
     float               _batt_current_resting;  // battery's current when motors at minimum
     float               _batt_resistance;       // battery's resistance calculated by comparing resting voltage vs in flight voltage
     int16_t             _batt_timer;            // timer used in battery resistance calcs
+    float               _air_density_ratio;     // air density / sea level density - decreases in altitude
     float               _lift_max;              // maximum lift ratio from battery voltage
     float               _throttle_limit;        // ratio of throttle limit between hover and maximum
     float               _throttle_in;           // last throttle input from set_throttle caller

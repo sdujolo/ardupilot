@@ -33,7 +33,7 @@
 
 #define WPNAV_WP_FAST_OVERSHOOT_MAX     200.0f      // 2m overshoot is allowed during fast waypoints to allow for smooth transitions to next waypoint
 
-#if HAL_CPU_CLASS < HAL_CPU_CLASS_75 || CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if HAL_CPU_CLASS < HAL_CPU_CLASS_75 || CONFIG_HAL_BOARD == HAL_BOARD_SITL
  # define WPNAV_LOITER_UPDATE_TIME      0.095f      // 10hz update rate on low speed CPUs (APM1, APM2)
  # define WPNAV_WP_UPDATE_TIME          0.095f      // 10hz update rate on low speed CPUs (APM1, APM2)
 #else
@@ -73,9 +73,6 @@ public:
     /// loiter_soften_for_landing - reduce response for landing
     void loiter_soften_for_landing();
 
-    /// set_loiter_velocity - allows main code to pass the maximum velocity for loiter
-    void set_loiter_velocity(float velocity_cms);
-
     /// calculate_loiter_leash_length - calculates the maximum distance in cm that the target position may be from the current location
     void calculate_loiter_leash_length();
 
@@ -96,6 +93,15 @@ public:
 
     /// update_loiter - run the loiter controller - should be called at 10hz
     void update_loiter(float ekfGndSpdLimit, float ekfNavVelGainScaler);
+
+    ///
+    /// brake controller
+    ///
+    /// init_brake_target - initialize's position and feed-forward velocity from current pos and velocity
+    void init_brake_target(float accel_cmss);
+    ///
+    /// update_brake - run the brake controller - should be called at 400hz
+    void update_brake(float ekfGndSpdLimit, float ekfNavVelGainScaler);
 
     ///
     /// waypoint controller
@@ -196,9 +202,6 @@ public:
     ///     seg_end_type should be set to stopped, straight or spline depending upon the next segment's type
     ///     next_destination should be set to the next segment's destination if the seg_end_type is SEGMENT_END_STRAIGHT or SEGMENT_END_SPLINE
     void set_spline_origin_and_destination(const Vector3f& origin, const Vector3f& destination, bool stopped_at_start, spline_segment_end_type seg_end_type, const Vector3f& next_destination);
-
-    // set_spline_dest_and_vel - accepts a destination position and velocity, sets origin to current position and velocity
-    void set_spline_dest_and_vel(const Vector3f& dest_pos, const Vector3f& dest_vel);
 
     /// reached_spline_destination - true when we have come within RADIUS cm of the waypoint
     bool reached_spline_destination() const { return _flags.reached_destination; }

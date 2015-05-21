@@ -59,6 +59,8 @@
 // minimum outputs for direct drive motors
 #define AP_MOTOR_HELI_DDTAIL_DEFAULT       500
 
+// COLYAW parameter min and max values
+#define AP_MOTOR_HELI_COLYAW_RANGE             10.0f
 
 // main rotor speed control types (ch8 out)
 #define AP_MOTORS_HELI_RSC_MODE_NONE            0       // main rotor ESC is directly connected to receiver, pilot controls ESC speed through transmitter directly
@@ -139,7 +141,7 @@ public:
     // enable - starts allowing signals to be sent to motors
     void enable();
 
-    // output_min - sends minimum values out to the motors
+    // output_min - sets servos to neutral point
     void output_min();
 
     // output_test - spin a motor at the pwm value specified
@@ -210,6 +212,7 @@ protected:
     // output - sends commands to the motors
     void                output_armed_stabilizing();
     void                output_armed_not_stabilizing();
+    void                output_armed_zero_throttle();
     void                output_disarmed();
 
 private:
@@ -274,7 +277,7 @@ private:
     AP_Int16        _ext_gyro_gain;             // PWM sent to external gyro on ch7 when tail type is Servo w/ ExtGyro
     AP_Int8         _servo_manual;              // Pass radio inputs directly to servos during set-up through mission planner
     AP_Int16        _phase_angle;               // Phase angle correction for rotor head.  If pitching the swash forward induces a roll, this can be correct the problem
-    AP_Int16        _collective_yaw_effect;     // Feed-forward compensation to automatically add rudder input when collective pitch is increased. Can be positive or negative depending on mechanics.    
+    AP_Float        _collective_yaw_effect;     // Feed-forward compensation to automatically add rudder input when collective pitch is increased. Can be positive or negative depending on mechanics.
     AP_Int16        _rsc_setpoint;              // rotor speed when RSC mode is set to is enabledv
     AP_Int8         _rsc_mode;                  // Which main rotor ESC control mode is active
     AP_Int8         _rsc_ramp_time;             // Time in seconds for the output to the main rotor's ESC to reach full speed

@@ -39,6 +39,7 @@ Options:
     -A               pass arguments to antenna tracker
     -t               set antenna tracker start location
     -L               select start location from Tools/autotest/locations.txt
+    -l               set the custom start location from -L
     -c               do a make clean before building
     -N               don't rebuild before starting ardupilot
     -w               wipe EEPROM and reload parameters
@@ -66,7 +67,7 @@ EOF
 
 
 # parse options. Thanks to http://wiki.bash-hackers.org/howto/getopts_tutorial
-while getopts ":I:VgGcj:TA:t:L:v:hwf:RNHeMS:" opt; do
+while getopts ":I:VgGcj:TA:t:L:l:v:hwf:RNHeMS:" opt; do
   case $opt in
     v)
       VEHICLE=$OPTARG
@@ -105,6 +106,9 @@ while getopts ":I:VgGcj:TA:t:L:v:hwf:RNHeMS:" opt; do
       ;;
     L)
       LOCATION="$OPTARG"
+      ;;
+    l)
+      CUSTOM_LOCATION="$OPTARG"
       ;;
     f)
       FRAME="$OPTARG"
@@ -253,10 +257,7 @@ pushd $autotest/../../$VEHICLE || {
     usage
     exit 1
 }
-if [ ! -f $autotest/../../config.mk ]; then
-    echo Generating a default configuration
-    make configure
-fi
+VEHICLEDIR=$(pwd)
 if [ $CLEAN_BUILD == 1 ]; then
     make clean
 fi
@@ -268,7 +269,13 @@ popd
 fi
 
 # get the location information
-SIMHOME=$(cat $autotest/locations.txt | grep -i "^$LOCATION=" | cut -d= -f2)
+if [ -z $CUSTOM_LOCATION ]; then
+    SIMHOME=$(cat $autotest/locations.txt | grep -i "^$LOCATION=" | cut -d= -f2)
+else
+    SIMHOME=$CUSTOM_LOCATION
+    LOCATION="Custom_Location"
+fi
+
 [ -z "$SIMHOME" ] && {
     echo "Unknown location $LOCATION"
     usage
@@ -303,7 +310,7 @@ if [ $START_ANTENNA_TRACKER == 1 ]; then
     popd
 fi
 
-cmd="/tmp/$VEHICLE.build/$VEHICLE.elf -I$INSTANCE"
+cmd="$VEHICLEDIR/$VEHICLE.elf -S -I$INSTANCE --home $SIMHOME"
 if [ $WIPE_EEPROM == 1 ]; then
     cmd="$cmd -w"
 fi
@@ -330,13 +337,13 @@ EOF
             exit 1
         fi
         PARMS="ArduPlane.parm"
-        if [ $WIPE_EEPROM == 1 ]; then
-            cmd="$cmd -PFORMAT_VERSION=13 -PSKIP_GYRO_CAL=1 -PRC3_MIN=1000 -PRC3_TRIM=1000"
-        fi
         if [ "$FRAME" = "CRRCSim" ]; then
             RUNSIM="nice $autotest/pysim/sim_wrapper.py --frame=CRRCSim --home=$SIMHOME --simin=$SIMIN_PORT --simout=$SIMOUT_PORT --fgout=$FG_PORT $EXTRA_SIM"
+        elif [ $EXTERNAL_SIM == 0 ]; then
+            RUNSIM=""
+            cmd="$cmd --model jsbsim --speedup=$SPEEDUP"
         else
-            RUNSIM="nice $autotest/jsb_sim/runsim.py --home=$SIMHOME --simin=$SIMIN_PORT --simout=$SIMOUT_PORT --fgout=$FG_PORT $EXTRA_SIM"
+            echo "Using external plane simulator"
         fi
         ;;
     ArduCopter)
@@ -344,7 +351,8 @@ EOF
         PARMS="copter_params.parm"
         ;;
     APMrover2)
-        RUNSIM="nice $autotest/pysim/sim_wrapper.py --home=$SIMHOME --simin=$SIMIN_PORT --simout=$SIMOUT_PORT --fgout=$FG_PORT $EXTRA_SIM"
+        RUNSIM=""
+        cmd="$cmd --model $FRAME --speedup=$SPEEDUP"
         PARMS="Rover.parm"
         ;;
     *)
@@ -372,22 +380,28 @@ fi
 
 trap kill_tasks SIGINT
 
-sleep 2
-rm -f $tfile
-if [ $EXTERNAL_SIM == 0 ]; then
-    $autotest/run_in_terminal_window.sh "Simulator" $RUNSIM || {
-        echo "Failed to start simulator: $RUNSIM"
-        exit 1
-    }
+echo "RUNSIM: $RUNSIM"
+
+if [ -n "$RUNSIM" -o "$EXTERNAL_SIM" == 1 ]; then
     sleep 2
+    rm -f $tfile
+    if [ $EXTERNAL_SIM == 0 ]; then
+        $autotest/run_in_terminal_window.sh "Simulator" $RUNSIM || {
+            echo "Failed to start simulator: $RUNSIM"
+            exit 1
+        }
+        sleep 2
+    else
+        echo "Using external ROS simulator"
+        RUNSIM="$autotest/ROS/runsim.py --simin=$SIMIN_PORT --simout=$SIMOUT_PORT --fgout=$FG_PORT $EXTRA_SIM"
+        $autotest/run_in_terminal_window.sh "ROS Simulator" $RUNSIM || {
+            echo "Failed to start simulator: $RUNSIM"
+            exit 1
+        }
+        sleep 2
+    fi
 else
-    echo "Using external ROS simulator"
-    RUNSIM="$autotest/ROS/runsim.py --simin=$SIMIN_PORT --simout=$SIMOUT_PORT --fgout=$FG_PORT $EXTRA_SIM"
-    $autotest/run_in_terminal_window.sh "ROS Simulator" $RUNSIM || {
-        echo "Failed to start simulator: $RUNSIM"
-        exit 1
-    }
-    sleep 2
+    echo "not running external simulator"
 fi
 
 # mavproxy.py --master tcp:127.0.0.1:5760 --sitl 127.0.0.1:5501 --out 127.0.0.1:14550 --out 127.0.0.1:14551 

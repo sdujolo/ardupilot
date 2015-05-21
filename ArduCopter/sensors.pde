@@ -20,6 +20,8 @@ static void read_barometer(void)
     }
     baro_alt = barometer.get_altitude() * 100.0f;
     baro_climbrate = barometer.get_climb_rate() * 100.0f;
+
+    motors.set_air_density_ratio(barometer.get_air_density_ratio());
 }
 
 #if CONFIG_SONAR == ENABLED
@@ -36,7 +38,7 @@ static int16_t read_sonar(void)
     sonar.update();
 
     // exit immediately if sonar is disabled
-    if (!sonar_enabled || !sonar.healthy()) {
+    if (!sonar_enabled || (sonar.status() != RangeFinder::RangeFinder_Good)) {
         sonar_alt_health = 0;
         return 0;
     }
@@ -86,12 +88,8 @@ static void init_optflow()
         return;
     }
 
-    // initialise sensor and display error on failure
+    // initialise optical flow sensor
     optflow.init();
-    if (!optflow.healthy()) {
-        cliSerial->print_P(PSTR("Failed to Init OptFlow\n"));
-        Log_Write_Error(ERROR_SUBSYSTEM_OPTFLOW,ERROR_CODE_FAILED_TO_INITIALISE);
-    }
 #endif      // OPTFLOW == ENABLED
 }
 
@@ -115,9 +113,7 @@ static void update_optical_flow(void)
         uint8_t flowQuality = optflow.quality();
         Vector2f flowRate = optflow.flowRate();
         Vector2f bodyRate = optflow.bodyRate();
-        // Use range from a separate range finder if available, not the PX4Flows built in sensor which is ineffective
-        float ground_distance_m = 0.01f*float(sonar_alt);
-        ahrs.writeOptFlowMeas(flowQuality, flowRate, bodyRate, last_of_update, sonar_alt_health, ground_distance_m);
+        ahrs.writeOptFlowMeas(flowQuality, flowRate, bodyRate, last_of_update);
         if (g.log_bitmask & MASK_LOG_OPTFLOW) {
             Log_Write_Optflow();
         }

@@ -89,6 +89,10 @@ static bool set_mode(uint8_t mode)
             break;
 #endif
 
+        case BRAKE:
+            success = brake_init(ignore_checks);
+            break;
+
         default:
             success = false;
             break;
@@ -197,6 +201,10 @@ static void update_flight_mode()
             poshold_run();
             break;
 #endif
+
+        case BRAKE:
+            brake_run();
+            break;
     }
 }
 
@@ -224,7 +232,10 @@ static void exit_mode(uint8_t old_control_mode, uint8_t new_control_mode)
         // this assumes all manual flight modes use get_pilot_desired_throttle to translate pilot input to output throttle
         set_accel_throttle_I_from_pilot_throttle(get_pilot_desired_throttle(g.rc_3.control_in));
     }
-    
+
+    // cancel any takeoffs in progress
+    takeoff_stop();
+
 #if FRAME_CONFIG == HELI_FRAME
     // firmly reset the flybar passthrough to false when exiting acro mode.
     if (old_control_mode == ACRO) {
@@ -243,6 +254,7 @@ static bool mode_requires_GPS(uint8_t mode) {
         case CIRCLE:
         case DRIFT:
         case POSHOLD:
+        case BRAKE:
             return true;
         default:
             return false;
@@ -342,6 +354,9 @@ print_flight_mode(AP_HAL::BetterStream *port, uint8_t mode)
         break;
     case POSHOLD:
         port->print_P(PSTR("POSHOLD"));
+        break;
+    case BRAKE:
+        port->print_P(PSTR("BRAKE"));
         break;
     default:
         port->printf_P(PSTR("Mode(%u)"), (unsigned)mode);

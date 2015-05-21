@@ -118,8 +118,8 @@ const AP_Param::GroupInfo AP_AHRS::var_info[] PROGMEM = {
 #if AP_AHRS_NAVEKF_AVAILABLE && !AHRS_EKF_USE_ALWAYS
     // @Param: EKF_USE
     // @DisplayName: Use NavEKF Kalman filter for attitude and position estimation
-    // @Description: This controls whether the NavEKF Kalman filter is used for attitude and position estimation
-    // @Values: 0:Disabled,1:Enabled
+    // @Description: This controls whether the NavEKF Kalman filter is used for attitude and position estimation and whether fallback to the DCM algorithm is allowed
+    // @Values: 0:Disabled,1:Enabled, 2:Enabled - No Fallback
     // @User: Advanced
     AP_GROUPINFO("EKF_USE",  13, AP_AHRS, _ekf_use, AHRS_EKF_USE_DEFAULT),
 #endif
@@ -256,6 +256,22 @@ void AP_AHRS::update_trig(void)
     // sin_roll, sin_pitch
     _sin_pitch = -temp.c.x;
     _sin_roll = temp.c.y / _cos_pitch;
+
+    // sanity checks
+    if (yaw_vector.is_inf() || yaw_vector.is_nan()) {
+        yaw_vector.x = 0.0f;
+        yaw_vector.y = 0.0f;
+        _sin_yaw = 0.0f;
+        _cos_yaw = 1.0f;
+    }
+
+    if (isinf(_cos_roll) || isnan(_cos_roll)) {
+        _cos_roll = cosf(roll);
+    }
+
+    if (isinf(_sin_roll) || isnan(_sin_roll)) {
+        _sin_roll = sinf(roll);
+    }
 }
 
 /*

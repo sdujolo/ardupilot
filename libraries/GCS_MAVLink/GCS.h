@@ -70,7 +70,12 @@ class GCS_MAVLINK
 {
 public:
     GCS_MAVLINK();
-    void        update(void (*run_cli)(AP_HAL::UARTDriver *));
+#if APM_BUILD_DELEGATES
+    typedef DELEGATE_FUNCTION1(void, AP_HAL::UARTDriver*) run_cli_fn;
+#else
+    typedef void (*run_cli_fn)(AP_HAL::UARTDriver *);
+#endif
+    void        update(run_cli_fn run_cli);
     void        init(AP_HAL::UARTDriver *port, mavlink_channel_t mav_chan);
     void        setup_uart(const AP_SerialManager& serial_manager, AP_SerialManager::SerialProtocol protocol, uint8_t instance);
     void        send_message(enum ap_message id);
@@ -285,7 +290,7 @@ private:
     void handle_mission_count(AP_Mission &mission, mavlink_message_t *msg);
     void handle_mission_clear_all(AP_Mission &mission, mavlink_message_t *msg);
     void handle_mission_write_partial_list(AP_Mission &mission, mavlink_message_t *msg);
-    void handle_mission_item(mavlink_message_t *msg, AP_Mission &mission);
+    bool handle_mission_item(mavlink_message_t *msg, AP_Mission &mission);
 
     void handle_request_data_stream(mavlink_message_t *msg, bool save);
     void handle_param_request_list(mavlink_message_t *msg);
@@ -294,8 +299,15 @@ private:
     void handle_radio_status(mavlink_message_t *msg, DataFlash_Class &dataflash, bool log_radio);
     void handle_serial_control(mavlink_message_t *msg, AP_GPS &gps);
     void lock_channel(mavlink_channel_t chan, bool lock);
-    void handle_set_mode(mavlink_message_t* msg, bool (*set_mode)(uint8_t mode));
+#if APM_BUILD_DELEGATES
+    typedef DELEGATE_FUNCTION1(bool, uint8_t) set_mode_fn;
+#else    
+    typedef bool (*set_mode_fn)(uint8_t);
+#endif
+    void handle_set_mode(mavlink_message_t* msg, set_mode_fn set_mode);
     void handle_gimbal_report(AP_Mount &mount, mavlink_message_t *msg) const;
+
+    void handle_gps_inject(const mavlink_message_t *msg, AP_GPS &gps);
 
     // return true if this channel has hardware flow control
     bool have_flow_control(void);

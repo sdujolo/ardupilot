@@ -36,6 +36,7 @@
 #include <AP_Terrain.h>
 #include <AP_Rally.h>
 #include <AP_BattMonitor.h>
+#include <AP_RangeFinder.h>
 
 const AP_HAL::HAL& hal = AP_HAL_BOARD_DRIVER;
 
@@ -53,7 +54,7 @@ void setup() {
     hal.console->printf("init done - %u compasses detected\n", compass.get_count());
 
     compass.set_and_save_offsets(0,0,0,0); // set offsets to account for surrounding interference
-    compass.set_declination(ToRad(0.0)); // set local difference between magnetic north and true north
+    compass.set_declination(ToRad(0.0f)); // set local difference between magnetic north and true north
 
     hal.scheduler->delay(1000);
     timer = hal.scheduler->micros();

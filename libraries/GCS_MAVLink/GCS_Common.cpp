@@ -19,6 +19,8 @@
 
 #include <GCS.h>
 #include <AP_AHRS.h>
+#include <AP_HAL.h>
+#include <AP_Vehicle.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -34,28 +36,16 @@ GCS_MAVLINK::GCS_MAVLINK() :
 void
 GCS_MAVLINK::init(AP_HAL::UARTDriver *port, mavlink_channel_t mav_chan)
 {
+    // sanity check chan
+    if (mav_chan >= MAVLINK_COMM_NUM_BUFFERS) {
+        return;
+    }
+
     _port = port;
     chan = mav_chan;
 
-    switch (chan) {
-        case MAVLINK_COMM_0:
-            mavlink_comm_0_port = _port;
-            initialised = true;
-            break;
-        case MAVLINK_COMM_1:
-            mavlink_comm_1_port = _port;
-            initialised = true;
-            break;
-        case MAVLINK_COMM_2:
-#if MAVLINK_COMM_NUM_BUFFERS > 2
-            mavlink_comm_2_port = _port;
-            initialised = true;
-            break;
-#endif
-        default:
-            // do nothing for unsupport mavlink channels
-            break;
-    }
+    mavlink_comm_port[chan] = _port;
+    initialised = true;
     _queued_parameter = NULL;
     reset_cli_timeout();
 }
@@ -413,38 +403,22 @@ void GCS_MAVLINK::handle_gimbal_report(AP_Mount &mount, mavlink_message_t *msg) 
  */
 bool GCS_MAVLINK::have_flow_control(void)
 {
-    switch (chan) {
-    case MAVLINK_COMM_0:
-        if (mavlink_comm_0_port == NULL) {
-            return false;
-        } else {
-            // assume USB has flow control
-            return hal.gpio->usb_connected() || mavlink_comm_0_port->get_flow_control() != AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE;
-        }
-        break;
-
-    case MAVLINK_COMM_1:
-        if (mavlink_comm_1_port == NULL) {
-            return false;
-        } else {
-            return mavlink_comm_1_port->get_flow_control() != AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE;
-        }
-        break;
-
-    case MAVLINK_COMM_2:
-#if MAVLINK_COMM_NUM_BUFFERS > 2
-        if (mavlink_comm_2_port == NULL) {
-            return false;
-        } else {
-            return mavlink_comm_2_port != NULL && mavlink_comm_2_port->get_flow_control() != AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE;
-        }
-        break;
-#endif
-
-    default:
-        break;
+    // sanity check chan
+    if (chan >= MAVLINK_COMM_NUM_BUFFERS) {
+        return false;
     }
-    return false;
+
+    if (mavlink_comm_port[chan] == NULL) {
+        return false;
+    }
+
+    if (chan == MAVLINK_COMM_0) {
+        // assume USB console has flow control
+        return hal.gpio->usb_connected() || mavlink_comm_port[chan]->get_flow_control() != AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE;
+    } else {
+        // all other channels
+        return mavlink_comm_port[chan]->get_flow_control() != AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE;
+    }
 }
 
 
@@ -680,12 +654,14 @@ void GCS_MAVLINK::handle_radio_status(mavlink_message_t *msg, DataFlash_Class &d
 
 /*
   handle an incoming mission item
+  return true if this is the last mission item, otherwise false
  */
-void GCS_MAVLINK::handle_mission_item(mavlink_message_t *msg, AP_Mission &mission)
+bool GCS_MAVLINK::handle_mission_item(mavlink_message_t *msg, AP_Mission &mission)
 {
     mavlink_mission_item_t packet;
-    uint8_t result = MAV_MISSION_ACCEPTED;
+    MAV_MISSION_RESULT result = MAV_MISSION_ACCEPTED;
     struct AP_Mission::Mission_Command cmd = {};
+    bool mission_is_complete = false;
 
     mavlink_msg_mission_item_decode(msg, &packet);
 
@@ -701,7 +677,7 @@ void GCS_MAVLINK::handle_mission_item(mavlink_message_t *msg, AP_Mission &missio
         handle_guided_request(cmd);
 
         // verify we received the command
-        result = 0;
+        result = MAV_MISSION_ACCEPTED;
         goto mission_ack;
     }
 
@@ -711,7 +687,7 @@ void GCS_MAVLINK::handle_mission_item(mavlink_message_t *msg, AP_Mission &missio
         handle_change_alt_request(cmd);
 
         // verify we recevied the command
-        result = 0;
+        result = MAV_MISSION_ACCEPTED;
         goto mission_ack;
     }
 
@@ -763,6 +739,7 @@ void GCS_MAVLINK::handle_mission_item(mavlink_message_t *msg, AP_Mission &missio
         
         send_text_P(SEVERITY_LOW,PSTR("flight plan received"));
         waypoint_receiving = false;
+        mission_is_complete = true;
         // XXX ignores waypoint radius for individual waypoints, can
         // only set WP_RADIUS parameter
     } else {
@@ -775,7 +752,7 @@ void GCS_MAVLINK::handle_mission_item(mavlink_message_t *msg, AP_Mission &missio
             send_message(MSG_NEXT_WAYPOINT);
         }
     }
-    return;
+    return mission_is_complete;
 
 mission_ack:
     // we are rejecting the mission/waypoint
@@ -785,6 +762,19 @@ mission_ack:
         msg->sysid,
         msg->compid,
         result);
+
+    return mission_is_complete;
+}
+
+void 
+GCS_MAVLINK::handle_gps_inject(const mavlink_message_t *msg, AP_GPS &gps)
+{
+    mavlink_gps_inject_data_t packet;
+    mavlink_msg_gps_inject_data_decode(msg, &packet);
+    //TODO: check target
+
+    gps.inject_data(packet.data, packet.len);
+
 }
 
 // send a message using mavlink, handling message queueing
@@ -837,7 +827,7 @@ void GCS_MAVLINK::send_message(enum ap_message id)
 }
 
 void
-GCS_MAVLINK::update(void (*run_cli)(AP_HAL::UARTDriver *))
+GCS_MAVLINK::update(run_cli_fn run_cli)
 {
     // receive new packets
     mavlink_message_t msg;
@@ -1189,7 +1179,7 @@ void GCS_MAVLINK::send_battery2(const AP_BattMonitor &battery)
 /*
   handle a SET_MODE MAVLink message
  */
-void GCS_MAVLINK::handle_set_mode(mavlink_message_t* msg, bool (*set_mode)(uint8_t mode))
+void GCS_MAVLINK::handle_set_mode(mavlink_message_t* msg, set_mode_fn set_mode)
 {
     uint8_t result = MAV_RESULT_FAILED;
     mavlink_set_mode_t packet;

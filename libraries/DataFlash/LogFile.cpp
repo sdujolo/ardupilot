@@ -277,7 +277,7 @@ uint16_t DataFlash_Block::find_last_page_of_log(uint16_t log_number)
   read and print a log entry using the format strings from the given structure
  */
 void DataFlash_Class::_print_log_entry(uint8_t msg_type,
-                                       void (*print_mode)(AP_HAL::BetterStream *port, uint8_t mode),
+                                       print_mode_fn print_mode,
                                        AP_HAL::BetterStream *port)
 {
     uint8_t i;
@@ -338,35 +338,35 @@ void DataFlash_Class::_print_log_entry(uint8_t msg_type,
         case 'f': {
             float v;
             memcpy(&v, &pkt[ofs], sizeof(v));
-            port->printf_P(PSTR("%f"), v);
+            port->printf_P(PSTR("%f"), (double)v);
             ofs += sizeof(v);
             break;
         }
         case 'c': {
             int16_t v;
             memcpy(&v, &pkt[ofs], sizeof(v));
-            port->printf_P(PSTR("%.2f"), 0.01f*v);
+            port->printf_P(PSTR("%.2f"), (double)(0.01f*v));
             ofs += sizeof(v);
             break;
         }
         case 'C': {
             uint16_t v;
             memcpy(&v, &pkt[ofs], sizeof(v));
-            port->printf_P(PSTR("%.2f"), 0.01f*v);
+            port->printf_P(PSTR("%.2f"), (double)(0.01f*v));
             ofs += sizeof(v);
             break;
         }
         case 'e': {
             int32_t v;
             memcpy(&v, &pkt[ofs], sizeof(v));
-            port->printf_P(PSTR("%.2f"), 0.01f*v);
+            port->printf_P(PSTR("%.2f"), (double)(0.01f*v));
             ofs += sizeof(v);
             break;
         }
         case 'E': {
             uint32_t v;
             memcpy(&v, &pkt[ofs], sizeof(v));
-            port->printf_P(PSTR("%.2f"), 0.01f*v);
+            port->printf_P(PSTR("%.2f"), (double)(0.01f*v));
             ofs += sizeof(v);
             break;
         }
@@ -439,7 +439,7 @@ void DataFlash_Block::_print_log_formats(AP_HAL::BetterStream *port)
 */
 void DataFlash_Block::LogReadProcess(uint16_t log_num,
                                      uint16_t start_page, uint16_t end_page,
-                                     void (*print_mode)(AP_HAL::BetterStream *port, uint8_t mode),
+                                     print_mode_fn print_mode,
                                      AP_HAL::BetterStream *port)
 {
     uint8_t log_step = 0;
@@ -801,7 +801,9 @@ void DataFlash_Class::Log_Write_IMU(const AP_InertialSensor &ins)
         accel_z : accel.z,
         gyro_error  : ins.get_gyro_error_count(0),
         accel_error : ins.get_accel_error_count(0),
-        temperature : ins.get_temperature(0)
+        temperature : ins.get_temperature(0),
+        gyro_health : (uint8_t)ins.get_gyro_health(0),
+        accel_health : (uint8_t)ins.get_accel_health(0)
     };
     WriteBlock(&pkt, sizeof(pkt));
     if (ins.get_gyro_count() < 2 && ins.get_accel_count() < 2) {
@@ -821,7 +823,9 @@ void DataFlash_Class::Log_Write_IMU(const AP_InertialSensor &ins)
         accel_z : accel2.z,
         gyro_error  : ins.get_gyro_error_count(1),
         accel_error : ins.get_accel_error_count(1),
-        temperature : ins.get_temperature(1)
+        temperature : ins.get_temperature(1),
+        gyro_health : (uint8_t)ins.get_gyro_health(1),
+        accel_health : (uint8_t)ins.get_accel_health(1)
     };
     WriteBlock(&pkt2, sizeof(pkt2));
     if (ins.get_gyro_count() < 3 && ins.get_accel_count() < 3) {
@@ -840,7 +844,9 @@ void DataFlash_Class::Log_Write_IMU(const AP_InertialSensor &ins)
         accel_z : accel3.z,
         gyro_error  : ins.get_gyro_error_count(2),
         accel_error : ins.get_accel_error_count(2),
-        temperature : ins.get_temperature(2)
+        temperature : ins.get_temperature(2),
+        gyro_health : (uint8_t)ins.get_gyro_health(2),
+        accel_health : (uint8_t)ins.get_accel_health(2)
     };
     WriteBlock(&pkt3, sizeof(pkt3));
 #endif
@@ -900,6 +906,26 @@ void DataFlash_Class::Log_Write_AHRS2(AP_AHRS &ahrs)
         alt   : loc.alt*1.0e-2f,
         lat   : loc.lat,
         lng   : loc.lng
+    };
+    WriteBlock(&pkt, sizeof(pkt));
+}
+
+// Write a POS packet
+void DataFlash_Class::Log_Write_POS(AP_AHRS &ahrs)
+{
+    Location loc;
+    if (!ahrs.get_position(loc)) {
+        return;
+    }
+    Vector3f pos;
+    ahrs.get_relative_position_NED(pos);
+    struct log_POS pkt = {
+        LOG_PACKET_HEADER_INIT(LOG_POS_MSG),
+        time_ms : hal.scheduler->millis(),
+        lat     : loc.lat,
+        lng     : loc.lng,
+        alt     : loc.alt*1.0e-2f,
+        rel_alt : -pos.z
     };
     WriteBlock(&pkt, sizeof(pkt));
 }
@@ -1254,9 +1280,9 @@ void DataFlash_Class::Log_Write_ESC(void)
                     LOG_PACKET_HEADER_INIT((uint8_t)(LOG_ESC1_MSG + i)),
                     time_ms     : time_ms,
                     rpm         : (int16_t)(esc_status.esc[i].esc_rpm/10),
-                    voltage     : (int16_t)(esc_status.esc[i].esc_voltage*100.f + .5f),
-                    current     : (int16_t)(esc_status.esc[i].esc_current*100.f + .5f),
-                    temperature : (int16_t)(esc_status.esc[i].esc_temperature*100.f + .5f)
+                    voltage     : (int16_t)(esc_status.esc[i].esc_voltage*100.0f + .5f),
+                    current     : (int16_t)(esc_status.esc[i].esc_current*100.0f + .5f),
+                    temperature : (int16_t)(esc_status.esc[i].esc_temperature*100.0f + .5f)
                 };
 
                 WriteBlock(&pkt, sizeof(pkt));

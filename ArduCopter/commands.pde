@@ -15,8 +15,24 @@ static void update_home_from_EKF()
         return;
     }
 
-    // move home to current ekf location (this will set home_state to HOME_SET)
-    set_home_to_current_location();
+    // special logic if home is set in-flight
+    if (motors.armed()) {
+        set_home_to_current_location_inflight();
+    } else {
+        // move home to current ekf location (this will set home_state to HOME_SET)
+        set_home_to_current_location();
+    }
+}
+
+// set_home_to_current_location_inflight - set home to current GPS location (horizontally) and EKF origin vertically
+static void set_home_to_current_location_inflight() {
+    // get current location from EKF
+    Location temp_loc;
+    if (inertial_nav.get_location(temp_loc)) {
+        const struct Location &ekf_origin = inertial_nav.get_origin();
+        temp_loc.alt = ekf_origin.alt;
+        set_home(temp_loc);
+    }
 }
 
 // set_home_to_current_location - set home to current GPS location
@@ -116,18 +132,5 @@ static void set_system_time_from_GPS()
         hal.util->set_system_clock(gps.time_epoch_usec());
         ap.system_time_set = true;
         Log_Write_Event(DATA_SYSTEM_TIME_SET);
-    }
-}
-
-// check_gps_base_pos - sets gps base position (used for RTK only)
-static void check_gps_base_pos()
-{
-    if (!ap.gps_base_pos_set && !motors.armed() && home_is_set()) {
-        // if we're ready to enter RTK mode, then capture current state as home,
-        // and enter RTK fixes
-        if (gps.can_calculate_base_pos()) {
-            gps.calculate_base_pos();
-        }
-        ap.gps_base_pos_set = true;
     }
 }

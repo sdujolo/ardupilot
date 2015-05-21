@@ -34,12 +34,13 @@
 #include <AP_Scheduler.h>
 
 #include <AP_HAL_AVR.h>
-#include <AP_HAL_AVR_SITL.h>
+#include <AP_HAL_SITL.h>
 #include <AP_HAL_Empty.h>
 #include <AP_HAL_PX4.h>
 #include <AP_BattMonitor.h>
 #include <AP_SerialManager.h>
 #include <RC_Channel.h>
+#include <AP_RangeFinder.h>
 
 const AP_HAL::HAL& hal = AP_HAL_BOARD_DRIVER;
 
@@ -124,8 +125,8 @@ void loop(void)
                         ToDeg(drift.x),
                         ToDeg(drift.y),
                         ToDeg(drift.z),
-                        compass.use_for_yaw() ? ToDeg(heading) : 0.0,
-                        (1.0e6*counter)/(now-last_print));
+                        compass.use_for_yaw() ? ToDeg(heading) : 0.0f,
+                        (1.0e6f*counter)/(now-last_print));
         last_print = now;
         counter = 0;
     }

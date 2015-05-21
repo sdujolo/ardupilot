@@ -89,7 +89,10 @@ public:
         k_param_yaw_trim,
         k_param_pitch_trim,
         k_param_yaw_range,
-        k_param_pitch_range,            // 136
+        k_param_pitch_range,
+        k_param_distance_min,
+        k_param_sysid_target,       // 138
+        k_param_gcs3,               // stream rates for fourth MAVLink port
 
         //
         // 150: Telemetry control
@@ -117,6 +120,7 @@ public:
     //
     AP_Int16 sysid_this_mav;
     AP_Int16 sysid_my_gcs;
+    AP_Int16 sysid_target;
 
     AP_Int8 compass_enabled;
 
@@ -138,6 +142,7 @@ public:
     AP_Float pitch_trim;
     AP_Int16 yaw_range;             // yaw axis total range of motion in degrees
     AP_Int16 pitch_range;           // pitch axis total range of motion in degrees
+    AP_Int16 distance_min;          // target's must be at least this distance from tracker to be tracked
 
     // Waypoints
     //

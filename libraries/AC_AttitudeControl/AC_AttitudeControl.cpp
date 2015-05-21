@@ -2,6 +2,7 @@
 
 #include "AC_AttitudeControl.h"
 #include <AP_HAL.h>
+#include <AP_Math.h>
 
 // table of user settable parameters
 const AP_Param::GroupInfo AC_AttitudeControl::var_info[] PROGMEM = {
@@ -433,7 +434,7 @@ void AC_AttitudeControl::frame_conversion_ef_to_bf(const Vector3f& ef_vector, Ve
 bool AC_AttitudeControl::frame_conversion_bf_to_ef(const Vector3f& bf_vector, Vector3f& ef_vector)
 {
     // avoid divide by zero
-    if (_ahrs.cos_pitch() == 0.0f) {
+    if (is_zero(_ahrs.cos_pitch())) {
         return false;
     }
     // convert earth frame angle or rates to body frame
@@ -671,14 +672,14 @@ void AC_AttitudeControl::accel_limiting(bool enable_limits)
 {
     if (enable_limits) {
         // if enabling limits, reload from eeprom or set to defaults
-        if (_accel_roll_max == 0.0f) {
+        if (is_zero(_accel_roll_max)) {
             _accel_roll_max.load();
         }
         // if enabling limits, reload from eeprom or set to defaults
-        if (_accel_pitch_max == 0.0f) {
+        if (is_zero(_accel_pitch_max)) {
             _accel_pitch_max.load();
         }
-        if (_accel_yaw_max == 0.0f) {
+        if (is_zero(_accel_yaw_max)) {
             _accel_yaw_max.load();
         }
     } else {
@@ -734,14 +735,14 @@ float AC_AttitudeControl::get_boosted_throttle(float throttle_in)
     float boost_factor = 1.0f/constrain_float(cos_tilt, 0.5f, 1.0f);
 
     float throttle_out = (throttle_in-min_throttle)*inverted_factor*boost_factor + min_throttle;
-    _angle_boost = throttle_out - throttle_in;
+    _angle_boost = constrain_float(throttle_out - throttle_in,-32000,32000);
     return throttle_out;
 }
 
 // sqrt_controller - response based on the sqrt of the error instead of the more common linear response
 float AC_AttitudeControl::sqrt_controller(float error, float p, float second_ord_lim)
 {
-    if (second_ord_lim == 0.0f || p == 0.0f) {
+    if (is_zero(second_ord_lim) || is_zero(p)) {
         return error*p;
     }
 
